@@ -12,20 +12,30 @@ import { artifactBasename, writeArtifactMetadata } from "../output/artifacts.js"
 import { downloadResult, type DownloadQuality } from "./download.js";
 import type { GFlowJob } from "../jobs/schema.js";
 import type { FlowAutomation, FlowAutomationRunInput, FlowJobResult } from "./types.js";
-import { flowLocators } from "./locators.js";
-import { dismissOpenLayers, pickOption, pickModel, confirmPicker, navigateToProject } from "./ui.js";
+import { AGENT_SETTINGS_SECTION, RATIO_ICON, flowLocators } from "./locators.js";
+import { UiContractError } from "../errors.js";
+import {
+  activateGenerationSubmit,
+  agentSettingChecked,
+  closeAgentSettings,
+  closeIngredientPicker,
+  collectResultMedia,
+  dismissOpenLayers,
+  navigateToProject,
+  openAgentSettings,
+  openIngredientPicker,
+  pickAgentOutputs,
+  pickAgentRatio,
+  pickIngredientAsset,
+  pickIngredientTab,
+  pickModelInAgentSection,
+  saveAgentSettings,
+  setConfirmAutomatic,
+  uploadIngredientMedia
+} from "./ui.js";
 
-export const FLOW_URL = "https://labs.google/fx/tools/flow";
-
-// Flow's aspect-ratio buttons render a Material icon ligature prefix; this maps the visible
-// ratio label to that ligature so we can target the right popover button.
-const RATIO_ICON: Record<string, string> = {
-  "16:9": "crop_16_9",
-  "9:16": "crop_9_16",
-  "4:3": "crop_landscape",
-  "1:1": "crop_square",
-  "3:4": "crop_portrait"
-};
+// The redesigned Flow app lives at flow.google.com; the labs.google URL redirects here.
+export const FLOW_URL = "https://flow.google.com";
 
 
 export class FlowPage implements FlowAutomation {
@@ -135,22 +145,20 @@ export class FlowPage implements FlowAutomation {
     };
   }
 
-  // Result media currently on the page (authenticated media URLs, or data: in fixtures).
-  // Video results render as <video> elements; image results as full (non-thumbnail) <img>.
-  // Video posters/thumbnails carry mediaUrlType=...THUMBNAIL and must be excluded.
+  // Result media currently on the project grid (redesigned tiles carry
+  // data-media-id; the fixture renders data:/getMediaUrlRedirect sources, which
+  // the shared collector keeps working).
   private async resultSrcs(type: "image" | "video"): Promise<string[]> {
-    if (type === "video") {
-      return this.page.$$eval("video", (vids) =>
-        vids
-          .map((v) => (v as HTMLVideoElement).currentSrc || (v as HTMLVideoElement).src)
-          .filter((src) => /media\.getMediaUrlRedirect/.test(src))
-      );
-    }
-    return this.page.$$eval("img", (imgs) =>
-      imgs
-        .map((img) => (img as HTMLImageElement).currentSrc || (img as HTMLImageElement).src)
-        .filter((src) => (/media\.getMediaUrlRedirect/.test(src) && !/mediaUrlType=/.test(src)) || src.startsWith("data:"))
-    );
+    const media = await collectResultMedia(this.page, type);
+    if (media.length > 0) return media.map((m) => m.src);
+    // Legacy/fixture sources: authenticated media URLs or data: URLs.
+    const legacy = await this.page.evaluate((t) => {
+      const els = [...document.querySelectorAll(t === "video" ? "video" : "img")] as Array<HTMLImageElement | HTMLVideoElement>;
+      return els
+        .map((e) => e.currentSrc || e.src)
+        .filter((src) => /media\.getMediaUrlRedirect/.test(src) || src.startsWith("data:"));
+    }, type);
+    return [...new Set(legacy)];
   }
 
   // Enter a project so the prompt box exists. If the editor is already showing (real Flow
@@ -165,102 +173,77 @@ export class FlowPage implements FlowAutomation {
     }
   }
 
-  // Best-effort: open the settings popover and set mode/model/ratio/duration/outputs. The
-  // controls live in a portal and are driven by React, so each option must be picked with a
-  // real (trusted) Playwright click — a DOM .click() in page.evaluate is ignored and leaves
-  // the mode on Image. When the popover is absent (e.g. the fixture) we leave current settings.
+  // Open the Agent settings dialog and apply the project's generation defaults for
+  // this job's type (image jobs drive the image-default section, video jobs the
+  // video-default section), then Save. Per-project defaults replace the old
+  // per-prompt pills; every requested value is verified in place before saving, so a
+  // setting that cannot be applied aborts the run instead of spending credits on
+  // stale defaults. When the settings control is absent (e.g. the offline fixture) we
+  // leave the current defaults untouched.
+  // Video duration: Flow exposes no duration control (verified live), so `--duration`
+  // is accepted and recorded in metadata but not enforced.
   private async applySettings(job: GFlowJob): Promise<void> {
     const settings = flowLocators(this.page).settingsButton.first();
     if (!(await settings.count())) return;
 
-    // A layer left open by a previous (failed) command would make this click TOGGLE the
-    // popover closed and every pick below silently miss — start from a clean slate.
-    await dismissOpenLayers(this.page);
-    await settings.click({ force: true }).catch(() => undefined);
-    await this.page.waitForTimeout(700);
-
-    // Mode first — switching it changes which ratios/durations/models are offered.
-    await pickOption(this.page, job.type === "video" ? /Video$/ : /Image$/);
-    await this.page.waitForTimeout(400);
-
-    // Video input mode: Frames (first/last frame images) vs Ingredients (text-to-video).
-    if (job.type === "video") {
-      const wantsFrames = Boolean(job.startFrame || job.endFrame);
-      await pickOption(this.page, wantsFrames ? /Frames$/ : /Ingredients$/);
-      await this.page.waitForTimeout(300);
+    await openAgentSettings(this.page);
+    const section = AGENT_SETTINGS_SECTION[job.type];
+    try {
+      if (job.ratio && RATIO_ICON[job.ratio]) {
+        if (!(await pickAgentRatio(this.page, section, job.ratio))) {
+          throw new UiContractError(`Flow does not offer aspect ratio ${job.ratio} for ${job.type} generation defaults.`);
+        }
+        const checked = await agentSettingChecked(this.page, section, new RegExp(`^${RATIO_ICON[job.ratio]}`));
+        if (checked !== true) {
+          throw new UiContractError(`Aspect ratio ${job.ratio} did not take effect for ${job.type} generation defaults.`);
+        }
+      }
+      if (job.outputs) {
+        if (!(await pickAgentOutputs(this.page, section, job.outputs))) {
+          throw new UiContractError(`Flow does not offer ${job.outputs} output(s) for ${job.type} generation defaults.`);
+        }
+        const checked = await agentSettingChecked(this.page, section, new RegExp(`^x${job.outputs}$`));
+        if (checked !== true) {
+          throw new UiContractError(`${job.outputs} output(s) did not take effect for ${job.type} generation defaults.`);
+        }
+      }
+      if (job.model) await pickModelInAgentSection(this.page, section, job.model);
+      await setConfirmAutomatic(this.page);
+      await saveAgentSettings(this.page);
+    } catch (error) {
+      // Never leave the dialog hanging over the prompt box for the next run.
+      await closeAgentSettings(this.page).catch(() => undefined);
+      throw error;
     }
-
-    if (job.ratio && RATIO_ICON[job.ratio]) await pickOption(this.page, new RegExp(`^${RATIO_ICON[job.ratio]}`));
-    if (job.type === "video" && job.duration) await pickOption(this.page, new RegExp(`^${job.duration}s$`));
-    await pickOption(this.page, job.outputs === 1 ? /^1x$/ : new RegExp(`^x${job.outputs}$`));
-    if (job.model) {
-      // pickModel's retry dismisses every layer, including this popover — hand it a way back in.
-      await pickModel(this.page, job.model, async () => {
-        await settings.click({ force: true }).catch(() => undefined);
-        await this.page.waitForTimeout(700);
-      });
-    }
-
-    // The model dropdown and the settings popover are separate layers; a single Escape can
-    // leave one of them open over the prompt box, so close them all.
-    await dismissOpenLayers(this.page);
   }
 
-  // Frames mode: fill the Start/End frame slot. Clicking the slot opens the Add Media dialog;
-  // "Upload media" triggers a file chooser; the upload is auto-selected, and the dialog's
-  // confirm button ("Add to Prompt") assigns it to the slot and closes the dialog. A slot
-  // already filled has no "Start"/"End" label, so we skip it rather than overwrite.
-  private async uploadFrame(slot: "Start" | "End", filePath: string): Promise<void> {
-    const slotEl = this.page.getByText(slot, { exact: true }).first();
-    if ((await slotEl.count()) === 0) return;
-    await slotEl.click().catch(() => undefined);
-
-    const dialog = this.page.locator("[role=dialog],[aria-modal=true]").first();
-    await dialog.waitFor({ state: "visible", timeout: 10000 }).catch(() => undefined);
-
-    const uploadButton = dialog.locator("button").filter({ hasText: /upload media/i }).first();
-    const [chooser] = await Promise.all([
-      this.page.waitForEvent("filechooser", { timeout: 15000 }),
-      uploadButton.click()
-    ]);
-    await chooser.setFiles(filePath);
-
-    // The freshly uploaded image is auto-selected; wait for that, falling back to selecting
-    // the first tile if needed, then confirm.
-    const selected = dialog.locator('[role=option][aria-selected="true"]').first();
-    await selected.waitFor({ state: "visible", timeout: 30000 }).catch(async () => {
-      await dialog.locator("[role=option]").first().click().catch(() => undefined);
-    });
-
-    await confirmPicker(this.page, dialog);
+  // Video start/end frame images: Flow's redesign removed the per-prompt Frames
+  // slots (Start/End), so the frame images are attached through the prompt-bar
+  // ingredient picker as reference images instead — the start/end distinction is
+  // lost until Flow exposes frame assignment again.
+  private async uploadFrame(_slot: "Start" | "End", filePath: string): Promise<void> {
+    await uploadIngredientMedia(this.page, filePath);
   }
 
   // Reference a saved character in the current generation.
-  // Live-verified: the "add_2 Create" button opens a media-picker dialog with a
-  // "Characters" tab; we click the tab, pick the named tile, then confirm.
+  // Live-verified contract: the prompt-bar "+" opens the ingredient picker; its
+  // "Characters" tab lists saved character tiles, and picking a tile attaches it
+  // (selection-based; no confirm button).
   private async referenceCharacter(name: string): Promise<void> {
-    // Open the ingredient picker (aria-haspopup="dialog", text "add_2Create")
-    const addBtn = this.page.locator('button[aria-haspopup="dialog"]').filter({ hasText: /add_2/i }).first();
-    if ((await addBtn.count()) === 0) return;
-    await addBtn.click().catch(() => undefined);
+    const locators = flowLocators(this.page);
+    if ((await locators.addIngredientButton.count()) === 0) return;
 
-    const dialog = this.page.locator("[role=dialog],[aria-modal=true]").first();
-    await dialog.waitFor({ state: "visible", timeout: 10000 }).catch(() => undefined);
-
-    // Switch to the Characters tab
-    const charsTab = dialog.locator("button,[role=tab]").filter({ hasText: /Characters/i }).first();
-    await charsTab.click().catch(() => undefined);
-    await this.page.waitForTimeout(400);
-
-    // Pick the tile by name
-    const tile = dialog.getByText(name, { exact: true }).first();
-    await tile.waitFor({ state: "visible", timeout: 10000 }).catch(() => undefined);
-    await tile.click().catch(() => undefined);
-
-    // Confirm
-    const confirm = dialog.locator("button").filter({ hasText: /add to prompt/i }).first();
-    await confirm.click().catch(() => undefined);
-    await dialog.waitFor({ state: "hidden", timeout: 10000 }).catch(() => undefined);
+    await openIngredientPicker(this.page);
+    await pickIngredientTab(this.page, /^accessibility_new\s*Characters$|^Characters$/i);
+    const picked = await pickIngredientAsset(this.page, name);
+    if (!picked) {
+      await closeIngredientPicker(this.page);
+      throw new GenerationFailedError(
+        `Character "${name}" was not found in the Flow ingredient picker. Use \`gflow character list\` to check saved characters.`
+      );
+    }
+    await this.page.waitForTimeout(300);
+    await closeIngredientPicker(this.page);
   }
 
   private async fillPrompt(prompt: string): Promise<void> {
@@ -282,18 +265,7 @@ export class FlowPage implements FlowAutomation {
   }
 
   private async submit(): Promise<void> {
-    const submit = flowLocators(this.page).submitButton.first();
-    await submit.waitFor({ state: "visible", timeout: 15000 });
-    const deadline = Date.now() + 15000;
-    while (Date.now() < deadline) {
-      const enabled = await submit.evaluate((b) => !((b as HTMLButtonElement).disabled || b.getAttribute("aria-disabled") === "true")).catch(() => false);
-      if (enabled) break;
-      await this.page.waitForTimeout(300);
-    }
-    await submit.click({ timeout: 2000 }).catch(async () => {
-      await dismissOpenLayers(this.page);
-      await submit.click();
-    });
+    await activateGenerationSubmit(this.page);
   }
 
   private async waitForResults(before: Set<string>, expected: number, timeoutMs: number, type: "image" | "video"): Promise<string[]> {

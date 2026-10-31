@@ -6,10 +6,69 @@
   </head>
   <body>
     <main data-testid="flow-ready">
-      <!-- Mirrors the real Flow editor: a contenteditable prompt and a "Create" submit
-           button that enables once the prompt has text, plus result <img> elements. -->
+      <!-- Mirrors the redesigned Flow editor: a contenteditable prompt, a prompt-bar
+           settings (tune) control, and an icon-only submit button (aria-label
+           "Start generation") that enables once the prompt has text, plus result
+           <img>/<video> elements. The prompt bar is fixed to the bottom like real
+           Flow, so the top-left viewer overlay can never sit over it. -->
       <div id="prompt" role="textbox" contenteditable="true" aria-label="Prompt"></div>
-      <button id="create" disabled>arrow_forwardCreate</button>
+      <div id="prompt-bar" style="position: fixed; bottom: 0; left: 0; right: 0; background: #111; color: #fff; padding: 8px; z-index: 2;">
+        <button id="add" aria-label="Add ingredients to the prompt box">add</button>
+        <button id="tune" aria-label="Settings"><i>tune</i></button>
+        <button id="create" aria-label="Start generation" disabled>arrow_forward</button>
+      </div>
+      <!-- Ingredient picker: selection-based tab panel with an upload control. -->
+      <div id="picker" role="tablist" hidden>
+        <div role="tab">All</div>
+        <div role="tab">Images</div>
+        <div role="tab">Videos</div>
+        <div role="tab">Characters</div>
+        <div role="tab">Uploads</div>
+        <button id="upload-media">Upload media</button>
+        <div id="picker-assets">
+          <div role="option">Untitled Character</div>
+          <div role="option">storyboard-frame.png</div>
+        </div>
+      </div>
+      <!-- Agent settings dialog: per-type default sections, confirm radios, Save. -->
+      <div id="settings" role="dialog" aria-modal="true" hidden>
+        <h2>Agent settings</h2>
+        <h3>Confirm before generating</h3>
+        <label id="confirm-always"><input type="radio" name="confirm" value="always" checked> Always Agent will ask for confirmation before generating media.</label>
+        <label id="confirm-never"><input type="radio" name="confirm" value="never"> Never Agent will generate media and spend credits automatically.</label>
+        <h3>Image generation default</h3>
+        <div data-section="image">
+          <button role="radio" aria-checked="true" data-radio="ratio">crop_16_916:9</button>
+          <button role="radio" aria-checked="false" data-radio="ratio">crop_landscape4:3</button>
+          <button role="radio" aria-checked="false" data-radio="ratio">crop_square1:1</button>
+          <button role="radio" aria-checked="false" data-radio="ratio">crop_9_169:16</button>
+          <button role="radio" aria-checked="false" data-radio="outputs">x1</button>
+          <button role="radio" aria-checked="true" data-radio="outputs">x2</button>
+          <button role="radio" aria-checked="false" data-radio="outputs">x3</button>
+          <button role="radio" aria-checked="false" data-radio="outputs">x4</button>
+          <button id="image-model" aria-label="Image generation default model" aria-haspopup="menu">Nano Banana 2.1 arrow_drop_down</button>
+        </div>
+        <h3>Video generation default</h3>
+        <div data-section="video">
+          <button role="radio" aria-checked="true" data-radio="ratio">crop_16_916:9</button>
+          <button role="radio" aria-checked="false" data-radio="ratio">crop_9_169:16</button>
+          <button role="radio" aria-checked="false" data-radio="outputs">x1</button>
+          <button role="radio" aria-checked="true" data-radio="outputs">x2</button>
+          <button role="radio" aria-checked="false" data-radio="outputs">x3</button>
+          <button role="radio" aria-checked="false" data-radio="outputs">x4</button>
+          <button id="video-model" aria-label="Video generation default model" aria-haspopup="menu">Omni 1.1 Flash arrow_drop_down</button>
+        </div>
+        <div role="menu" id="model-menu" hidden>
+          <div role="menuitem" data-model="Nano Banana Pro">🍌 Nano Banana Pro</div>
+          <div role="menuitem" data-model="Nano Banana 2 Lite">🍌 Nano Banana 2 Lite</div>
+          <div role="menuitem" data-model="Nano Banana 2.1">🍌 Nano Banana 2.1</div>
+          <div role="menuitem" data-model="Omni 1.1 Flash">Omni 1.1 Flash</div>
+          <div role="menuitem" data-model="Veo 3.1 - Fast">Veo 3.1 - Fast</div>
+          <div role="menuitem" data-model="Veo 3.1 - Quality">Veo 3.1 - Quality</div>
+        </div>
+        <button id="save-settings">Save</button>
+        <button id="close-settings" aria-label="Close">Close</button>
+      </div>
       <section id="results"></section>
     </main>
     <script>
@@ -17,10 +76,21 @@
         tile.style.cursor = "pointer";
         tile.addEventListener("click", () => {
           // Real Flow navigates to /edit/<id>, replacing any open viewer; emulate that by
-          // dropping a previous overlay so each tile click shows ITS own viewer.
-          document.querySelectorAll('[role=dialog]').forEach((d) => d.remove());
+          // dropping a previous viewer overlay so each tile click shows ITS own viewer.
+          // (Only viewers are removed — the Agent settings dialog is a separate surface.)
+          document.querySelectorAll(".gflow-viewer").forEach((d) => d.remove());
           const overlay = document.createElement("div");
+          overlay.className = "gflow-viewer";
           overlay.setAttribute("role", "dialog");
+          overlay.dataset.media = mediaName;
+          // Real Flow docks the viewer as an aside and the prompt bar stays
+          // interactive; the fixture keeps its simple flow layout, so the viewer only
+          // captures its own controls and never blocks the prompt bar underneath.
+          overlay.setAttribute("style", "position: fixed; top: 0; left: 0; width: 220px; z-index: 1; background: #222; color: #fff; padding: 8px; pointer-events: none;");
+          // Keep the viewer's own controls clickable (the container itself must not
+          // swallow events aimed at the prompt bar beneath it).
+          const makeInteractive = () =>
+            overlay.querySelectorAll("button,[role=menuitem]").forEach((el) => el.setAttribute("style", "pointer-events: auto;"));
           // Encode the result identity (and chosen tier) in the bytes so tests can verify the
           // right result reached disk through the right path — not just that a file exists.
           const triggerDownload = (tier) => {
@@ -30,11 +100,15 @@
             a.download = mediaName + (isVideo ? ".mp4" : ".png");
             document.body.appendChild(a);
             a.click();
+            // Real Flow closes the viewer's menu after a download.
+            overlay.querySelectorAll("[role=menu]").forEach((m) => { m.hidden = true; });
+            overlay.querySelectorAll("[data-gflow-dl]").forEach((el) => el.removeAttribute("data-gflow-dl"));
           };
           if (isVideo) {
             // Real Flow's video viewer has a plain Download button (no tier menu) that
             // downloads the full asset directly.
             overlay.innerHTML = `<button type="button" data-dl>download Download</button>`;
+            makeInteractive();
             document.body.appendChild(overlay);
             overlay.querySelector("[data-dl]").addEventListener("click", () => triggerDownload("original"));
           } else {
@@ -46,6 +120,7 @@
                 <div role="menuitem" data-q="2k">2K Upscaled</div>
                 <div role="menuitem" data-q="4k">4K Upscaled Upgrade</div>
               </div>`;
+            makeInteractive();
             document.body.appendChild(overlay);
             const menu = overlay.querySelector("[role=menu]");
             overlay.querySelector("[data-dl]").addEventListener("click", () => { menu.hidden = false; });
@@ -63,10 +138,69 @@
       const delay = Number(params.get("delay") ?? "0");
       const prompt = document.getElementById("prompt");
       const create = document.getElementById("create");
+      const settings = document.getElementById("settings");
+      const picker = document.getElementById("picker");
+      const modelMenu = document.getElementById("model-menu");
       let generation = 0;
 
       prompt.addEventListener("input", () => {
         create.disabled = prompt.textContent.trim().length === 0;
+      });
+
+      // --- Agent settings dialog behavior ---
+      document.getElementById("tune").addEventListener("click", () => {
+        settings.hidden = false;
+        modelMenu.hidden = true;
+      });
+      document.getElementById("save-settings").addEventListener("click", () => { settings.hidden = true; });
+      document.getElementById("close-settings").addEventListener("click", () => { settings.hidden = true; });
+      // Model dropdowns open the shared menu; picking an option names its own trigger only.
+      let openDropdown = null;
+      for (const dropdown of [document.getElementById("image-model"), document.getElementById("video-model")]) {
+        dropdown.addEventListener("click", () => { modelMenu.hidden = false; openDropdown = dropdown; });
+      }
+      modelMenu.querySelectorAll("[role=menuitem]").forEach((item) => {
+        item.addEventListener("click", () => {
+          const name = item.dataset.model || item.textContent;
+          if (openDropdown) openDropdown.textContent = `${name} arrow_drop_down`;
+          modelMenu.hidden = true;
+        });
+      });
+      // Radio-group behavior: only the clicked ratio/output per section stays checked.
+      for (const section of settings.querySelectorAll("[data-section]")) {
+        for (const radio of section.querySelectorAll("[role=radio]")) {
+          radio.addEventListener("click", () => {
+            section.querySelectorAll(`[data-radio="${radio.dataset.radio}"]`).forEach((r) => r.setAttribute("aria-checked", String(r === radio)));
+          });
+        }
+      }
+
+      // --- Ingredient picker behavior ---
+      document.getElementById("add").addEventListener("click", () => { picker.hidden = false; });
+      // Seeded tiles behave like selected assets: clicking attaches them to the prompt.
+      for (const tile of picker.querySelectorAll("[role=option]")) {
+        tile.addEventListener("click", () => {
+          tile.setAttribute("aria-selected", "true");
+          document.getElementById("prompt").dataset.attached = tile.textContent.trim();
+        });
+      }      document.getElementById("upload-media").addEventListener("click", () => {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = "image/*,video/*";
+        input.style.display = "none";
+        document.body.appendChild(input);
+        input.addEventListener("change", () => {
+          const tile = document.createElement("div");
+          tile.setAttribute("role", "option");
+          tile.textContent = input.files?.[0]?.name || "uploaded-asset";
+          document.getElementById("picker-assets").appendChild(tile);
+          tile.addEventListener("click", () => {
+            tile.setAttribute("aria-selected", "true");
+            document.getElementById("prompt").dataset.attached = tile.textContent;
+          });
+          input.remove();
+        });
+        input.click();
       });
 
       create.addEventListener("click", () => {
@@ -79,12 +213,15 @@
           if (isVideo) {
             // Video results are matched by a getMediaUrlRedirect src; the URL need not load.
             tile = document.createElement("video");
-            tile.src = `https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=fixture-${currentGeneration}`;
+            tile.src = `https://flow.google.com/api/trpc/media.getMediaUrlRedirect?name=fixture-${currentGeneration}`;
           } else {
             // Image results use a data: URL so the fallback context-fetch path can read bytes.
             tile = document.createElement("img");
             tile.src = `data:text/plain,fixture generation ${currentGeneration}`;
           }
+          // Result tiles are clickable in Flow; give them a real box so trusted clicks land.
+          tile.style.width = "40px";
+          tile.style.height = "40px";
           document.getElementById("results").appendChild(tile);
           gflowAttachViewer(tile, `fixture-gen-${currentGeneration}`, isVideo);
         }, delay);

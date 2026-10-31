@@ -1,109 +1,140 @@
 import { join } from "node:path";
 import type { Page } from "playwright";
-import { GenerationBlockedError, GenerationFailedError } from "../errors.js";
+import { GenerationBlockedError, GenerationFailedError, UiContractError } from "../errors.js";
 import { artifactBasename, writeArtifactMetadata } from "../output/artifacts.js";
 import { downloadResult } from "./download.js";
-import { flowLocators } from "./locators.js";
+import { AGENT_SETTINGS_SECTION, RATIO_ICON, flowLocators } from "./locators.js";
 import type {
   AgentAutomation, AgentInstructionInput, AgentInstructionSummary,
   AgentSettingsInput, FlowJobResult, RunAgentInput
 } from "./types.js";
-import { addFromProject, navigateToProject, pickOption, pickOptionInSection, projectSubUrl, selectModelOption } from "./ui.js";
-
-const RATIO_ICON: Record<string, string> = {
-  "16:9": "crop_16_9", "9:16": "crop_9_16", "4:3": "crop_landscape", "1:1": "crop_square", "3:4": "crop_portrait"
-};
+import {
+  activateGenerationSubmit,
+  agentSettingChecked,
+  closeAgentSettings,
+  closeIngredientPicker,
+  collectResultMedia,
+  navigateToProject,
+  openAgentSettings,
+  pickAgentOutputs,
+  pickAgentRatio,
+  pickIngredientAsset,
+  pickModelInAgentSection,
+  projectSubUrl,
+  saveAgentSettings,
+  setConfirmBeforeGenerating
+} from "./ui.js";
 
 export class AgentPage implements AgentAutomation {
   constructor(private readonly page: Page) {}
 
+  // The redesigned Flow is agent-first: the prompt box is always the agent's
+  // instruction bar, so "opening the agent" only means having a project open.
   private async openAgent(project?: string): Promise<void> {
     const projectId = await navigateToProject(this.page, project);
     await this.page.goto(projectSubUrl(projectId, ""), { waitUntil: "domcontentloaded" });
-    await this.page.locator('[role="textbox"][contenteditable="true"]').first().waitFor({ state: "visible", timeout: 20000 });
-    // Toggle Agent on if it isn't already (the bar shows "Agent Instructions" when active).
-    const active = await this.page.getByText(/Agent Instructions/i).first().isVisible().catch(() => false);
-    if (!active) await pickOption(this.page, /^Agent$/);
-    await this.page.waitForTimeout(400);
+    await flowLocators(this.page).promptBox.first().waitFor({ state: "visible", timeout: 20000 });
   }
 
   async applySettings(input: AgentSettingsInput): Promise<void> {
     await this.openAgent(input.project);
-    await pickOption(this.page, /tuneSettings/);
-    await this.page.waitForTimeout(600);
-
-    if (input.confirm) await pickOption(this.page, input.confirm === "always" ? /Always/ : /Never/);
-    const img = /Image generation default/i;
-    if (input.imageRatio && RATIO_ICON[input.imageRatio]) await pickOptionInSection(this.page, img, new RegExp(`^${RATIO_ICON[input.imageRatio]}`));
-    if (input.imageQuantity) await pickOptionInSection(this.page, img, input.imageQuantity === 1 ? /^1x$/ : new RegExp(`^x${input.imageQuantity}$`));
-    if (input.imageModel) await this.pickSectionModel(img, input.imageModel);
-    const vid = /Video generation default/i;
-    if (input.videoRatio && RATIO_ICON[input.videoRatio]) await pickOptionInSection(this.page, vid, new RegExp(`^${RATIO_ICON[input.videoRatio]}`));
-    if (input.videoQuantity) await pickOptionInSection(this.page, vid, input.videoQuantity === 1 ? /^1x$/ : new RegExp(`^x${input.videoQuantity}$`));
-    if (input.videoModel) await this.pickSectionModel(vid, input.videoModel);
-
-    await pickOption(this.page, /^Save$/);
-    await this.page.waitForTimeout(500);
+    await openAgentSettings(this.page);
+    try {
+      if (input.confirm) await setConfirmBeforeGenerating(this.page, input.confirm);
+      await this.applySection(AGENT_SETTINGS_SECTION.image, input.imageRatio, input.imageQuantity, input.imageModel);
+      await this.applySection(AGENT_SETTINGS_SECTION.video, input.videoRatio, input.videoQuantity, input.videoModel);
+      await saveAgentSettings(this.page);
+    } catch (error) {
+      await closeAgentSettings(this.page).catch(() => undefined);
+      throw error;
+    }
   }
 
-  // Open the model dropdown within a section, then choose the model from the open menu.
-  private async pickSectionModel(section: RegExp, model: string): Promise<void> {
-    await pickOptionInSection(this.page, section, /arrow_drop_down/);
-    await this.page.waitForTimeout(500);
-    await selectModelOption(this.page, model);
+  // Apply one defaults section's requested fields, verifying each landed.
+  private async applySection(section: RegExp, ratio?: string, quantity?: number, model?: string): Promise<void> {
+    if (ratio && RATIO_ICON[ratio]) {
+      if (!(await pickAgentRatio(this.page, section, ratio))) {
+        throw new UiContractError(`Flow does not offer aspect ratio ${ratio} for ${section.source} defaults.`);
+      }
+      if ((await agentSettingChecked(this.page, section, new RegExp(`^${RATIO_ICON[ratio]}`))) !== true) {
+        throw new UiContractError(`Aspect ratio ${ratio} did not take effect for ${section.source} defaults.`);
+      }
+    }
+    if (quantity) {
+      if (!(await pickAgentOutputs(this.page, section, quantity))) {
+        throw new UiContractError(`Flow does not offer ${quantity} output(s) for ${section.source} defaults.`);
+      }
+      if ((await agentSettingChecked(this.page, section, new RegExp(`^x${quantity}$`))) !== true) {
+        throw new UiContractError(`${quantity} output(s) did not take effect for ${section.source} defaults.`);
+      }
+    }
+    if (model) await pickModelInAgentSection(this.page, section, model);
   }
 
   async addInstruction(input: AgentInstructionInput): Promise<void> {
     await this.openAgent(input.project);
-    await pickOption(this.page, /article_sparkAgent Instructions/);
-    await this.page.waitForTimeout(400);
-    await pickOption(this.page, /Add instruction/);
-    await this.page.waitForTimeout(400);
-    if (input.ref) await addFromProject(this.page, /Add Image|Reference/i, input.ref);
-    // Live verification confirmed: the guideline field is a <textarea> with
-    // placeholder="Create a guideline for your agent" (not a contenteditable div).
-    const field = this.page.locator('textarea[placeholder="Create a guideline for your agent"]').last();
+    await openAgentInstructions(this.page);
+
+    // A reference image attaches through the ingredient picker.
+    if (input.ref) {
+      const picked = await pickIngredientAsset(this.page, input.ref);
+      if (!picked) {
+        await closeIngredientPicker(this.page);
+        throw new GenerationFailedError(`Reference "${input.ref}" was not found in the Flow ingredient picker.`);
+      }
+      await closeIngredientPicker(this.page);
+    }
+
+    // Live-verified: the instruction sheet holds a plain <textarea>.
+    const field = this.page.locator("textarea").last();
+    if ((await field.count()) === 0) {
+      throw new UiContractError("The Flow agent instructions sheet did not show a text field.");
+    }
     await field.click().catch(() => undefined);
     await field.fill(input.text).catch(() => undefined);
-    await pickOption(this.page, /^Done$/);
+    await this.confirmInstructionSheet();
     await this.page.waitForTimeout(300);
   }
 
   async listInstructions(project?: string): Promise<AgentInstructionSummary[]> {
     await this.openAgent(project);
-    await pickOption(this.page, /article_sparkAgent Instructions/);
-    await this.page.waitForTimeout(400);
-    // Live verified: guideline fields are <textarea> with the "Create a guideline" placeholder.
-    return this.page.evaluate(() =>
-      [...document.querySelectorAll('textarea[placeholder="Create a guideline for your agent"]')]
-        .map((e) => ({ text: (e as HTMLTextAreaElement).value.trim(), hasRef: false }))
-        .filter((row) => row.text.length > 0)
+    await openAgentInstructions(this.page);
+    const texts = await this.page.evaluate(() =>
+      [...document.querySelectorAll("textarea")]
+        .map((t) => (t as HTMLTextAreaElement).value.trim())
+        .filter((t) => t.length > 0)
     );
+    await this.closeInstructionSheet();
+    return texts.map((text) => ({ text, hasRef: false }));
   }
 
   async clearInstructions(project?: string): Promise<void> {
     await this.openAgent(project);
-    await pickOption(this.page, /article_sparkAgent Instructions/);
-    await this.page.waitForTimeout(400);
+    await openAgentInstructions(this.page);
     for (let i = 0; i < 20; i += 1) {
-      const removed = await pickOption(this.page, /Remove instruction/);
+      const removed = await this.page.evaluate(() => {
+        const btn = [...document.querySelectorAll("button")].find((b) => /remove instruction/i.test(b.textContent || ""));
+        if (!btn) return false;
+        btn.click();
+        return true;
+      });
       if (!removed) break;
-      await this.page.waitForTimeout(200);
+      await this.page.waitForTimeout(250);
     }
-    await pickOption(this.page, /^Done$/);
+    await this.confirmInstructionSheet();
   }
 
   async runAgent(input: RunAgentInput): Promise<FlowJobResult> {
     await this.openAgent(input.project);
     const locators = flowLocators(this.page);
-    const box = this.page.locator('[role="textbox"][contenteditable="true"]').first();
+    const box = locators.promptBox.first();
     await box.click();
     await box.press("ControlOrMeta+a").catch(() => undefined);
     await box.press("Backspace").catch(() => undefined);
     await box.pressSequentially(input.prompt, { delay: 8 });
 
     const before = new Set(await this.resultSrcs());
-    await this.page.locator("button").filter({ hasText: "Create" }).filter({ hasText: /arrow_forward/ }).first().click();
+    await activateGenerationSubmit(this.page);
 
     const deadline = Date.now() + (input.timeout ?? 1800) * 1000;
     let newSrcs: string[] = [];
@@ -133,7 +164,9 @@ export class AgentPage implements AgentAutomation {
   }
 
   private async resultSrcs(): Promise<string[]> {
-    return this.page.evaluate(() => {
+    const media = await collectResultMedia(this.page, "image");
+    if (media.length > 0) return media.map((m) => m.src);
+    const legacy = await this.page.evaluate(() => {
       const out: string[] = [];
       for (const v of [...document.querySelectorAll("video")]) {
         const s = (v as HTMLVideoElement).currentSrc || (v as HTMLVideoElement).src;
@@ -145,5 +178,38 @@ export class AgentPage implements AgentAutomation {
       }
       return out;
     });
+    return [...new Set(legacy)];
   }
+
+  private async confirmInstructionSheet(): Promise<void> {
+    // The sheet's Done/Save control, if it exists; Escape otherwise.
+    const done = this.page.getByRole("button", { name: /^(Done|Save)$/i }).first();
+    if (await done.count()) await done.click({ timeout: 5000 }).catch(() => undefined);
+    else await this.page.keyboard.press("Escape").catch(() => undefined);
+    await this.page.waitForTimeout(400);
+  }
+
+  private async closeInstructionSheet(): Promise<void> {
+    const opened = (await this.page.getByRole("button", { name: /^(Done|Save)$/i }).first().count()) > 0;
+    if (!opened) return;
+    await this.page.keyboard.press("Escape").catch(() => undefined);
+    await this.page.waitForTimeout(400);
+  }
+}
+
+// Open the agent-instructions sheet (live-verified: prompt-bar button with
+// aria-label "Agent instructions" opens an in-page sheet titled the same).
+async function openAgentInstructions(page: Page): Promise<void> {
+  const button = flowLocators(page).agentInstructionsButton;
+  if ((await button.count()) === 0) {
+    throw new UiContractError("Flow does not show an agent instructions control.");
+  }
+  await button.click({ timeout: 8000 }).catch(() => undefined);
+  const opened = await page
+    .getByRole("heading", { name: /Agent instructions/i })
+    .first()
+    .waitFor({ state: "visible", timeout: 8000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!opened) throw new UiContractError("The Flow agent instructions sheet did not open.");
 }

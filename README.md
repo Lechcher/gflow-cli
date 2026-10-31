@@ -4,7 +4,7 @@
 
 # gflow-cli
 
-**Generate images and videos with [Google Flow](https://labs.google/fx/tools/flow) from your terminal.**
+**Generate images and videos with [Google Flow](https://flow.google.com) from your terminal.**
 
 `gflow` drives Flow inside your own logged-in Google Chrome, so it works as a normal, human
 browser session — no private APIs, no login bypass.
@@ -24,10 +24,10 @@ browser session — no private APIs, no login bypass.
 
 ## Features
 
-- 🖼️ **Image generation** — Nano Banana 2 / Pro, Imagen 4
-- 🎬 **Video generation** — Omni Flash, Veo 3.1 (Lite / Fast / Quality)
-- 🎞️ **Frames mode** — animate between a first and last frame image
-- 🎛️ **Full control** — model, aspect ratio, duration, output count
+- 🖼️ **Image generation** — Nano Banana 2 / 2.1, Nano Banana Pro
+- 🎬 **Video generation** — Omni 1.1 Flash, Veo 3.1 (Lite / Fast / Quality)
+- 🎞️ **Frames mode** — attach first/last frame images as references (see the note below)
+- 🎛️ **Full control** — model, aspect ratio, output count (duration is set by Flow's video model)
 - 📦 **Batch pipelines** — run many jobs from a YAML file
 - ⬆️ **Full-quality downloads** — pulls Flow's native asset via the in-app Download menu; add `--upscale 2k` or `--upscale 4k` for upscaled tiers
 - 🎬➕ **Scene extend** — chain prompts to grow a video ~7s at a time (up to 148s) and append other clips, building long videos with a real story
@@ -125,7 +125,7 @@ Attaches to your Flow window (or launches one) and confirms you're signed in and
 | --- | --- | --- |
 | `--id <id>` | _required_ | Job id (used in output filenames) |
 | `--prompt <text>` | _required_ | Generation prompt |
-| `--model <name>` | Flow default | `Nano Banana 2`, `Nano Banana Pro`, `Imagen 4` |
+| `--model <name>` | Flow default | `Nano Banana 2.1`, `Nano Banana 2 Lite`, `Nano Banana Pro` |
 | `--ratio <ratio>` | Flow default | `16:9`, `4:3`, `1:1`, `3:4`, `9:16` |
 | `--outputs <n>` | `1` | Number of images (1–4) |
 | `--character <name...>` | — | Reference one or more saved characters |
@@ -143,11 +143,11 @@ All `image` options apply, plus:
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `--model <name>` | `Omni Flash` | `Omni Flash`, `Veo 3.1 - Lite/Fast/Quality` |
+| `--model <name>` | Flow default | `Omni 1.1 Flash`, `Veo 3.1 - Lite/Fast/Quality` |
 | `--ratio <ratio>` | Flow default | `16:9`, `9:16` |
-| `--duration <seconds>` | Flow default | `4`, `6`, `8`, `10` |
-| `--start-frame <path>` | — | First-frame image (enables **Frames** mode) |
-| `--end-frame <path>` | — | Last-frame image (Frames mode) |
+| `--duration <seconds>` | — | Recorded in the output metadata. The redesigned Flow exposes no per-prompt duration control, so length follows the chosen video model |
+| `--start-frame <path>` | — | First-frame image, attached as a reference |
+| `--end-frame <path>` | — | Last-frame image, attached as a reference |
 | `--character <name...>` | — | Reference one or more saved characters |
 | `--upscale <tier>` | — | Download upscaled output: `2k` or `4k` |
 | `--timeout <seconds>` | `1800` | Generation timeout |
@@ -155,16 +155,24 @@ All `image` options apply, plus:
 Model names are matched loosely, so `--model veo-3.1-fast` and `--model "Veo 3.1 - Fast"` are
 equivalent.
 
-#### Frames (first/last frame → video)
+#### Frames (frame images → video)
 
-By default video is text-to-video. Pass frame images to animate between them instead:
+Pass frame images to reference while generating video:
 
 ```bash
 gflow video --id morph --prompt "smooth cinematic transition" \
-  --start-frame ./first.png --end-frame ./last.png --duration 4 --out ./out
+  --start-frame ./first.png --end-frame ./last.png --out ./out
 ```
 
-`--end-frame` is optional (provide only `--start-frame` to animate from a single first frame).
+`--end-frame` is optional (provide only `--start-frame` to reference a single first frame).
+
+> **Redesign note.** Flow's redesigned UI has no per-prompt Frames mode, no
+> per-prompt duration control, and no per-prompt image/video mode switch:
+> generation defaults (ratio, output count, model) are set per project in Flow's
+> Agent settings dialog, and gflow applies the job's requested values there and
+> saves them before submitting. Frame images are attached through the prompt's
+> ingredient picker as references — Flow no longer lets gflow assign them to
+> first/last-frame slots.
 
 ### `gflow batch`
 

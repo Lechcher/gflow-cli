@@ -9,7 +9,7 @@ import {
 import { artifactBasename, writeArtifactMetadata } from "../output/artifacts.js";
 import { flowLocators } from "./locators.js";
 import type { ExtendSceneInput, ExtendSceneResult, SceneAutomation, SceneSummary } from "./types.js";
-import { FLOW_BASE, dismissOpenLayers, resolveExistingProject } from "./ui.js";
+import { activateGenerationSubmit, FLOW_BASE, dismissOpenLayers, resolveExistingProject } from "./ui.js";
 
 // All selectors below were verified against the live scenebuilder UI:
 // - A video card on the project page links to /project/<id>/edit/<tileId>; opening it
@@ -204,19 +204,9 @@ export class ScenePage implements SceneAutomation {
     await box.press("Backspace").catch(() => undefined);
     await box.pressSequentially(prompt, { delay: 8 });
 
-    const submit = this.page.locator("button").filter({ hasText: /arrow_forward/ }).first();
-    const enabledDeadline = Date.now() + 15000;
-    while (Date.now() < enabledDeadline) {
-      const enabled = await submit
-        .evaluate((b) => !((b as HTMLButtonElement).disabled || b.getAttribute("aria-disabled") === "true"))
-        .catch(() => false);
-      if (enabled) break;
-      await this.page.waitForTimeout(300);
-    }
-    await submit.click({ timeout: 2000 }).catch(async () => {
-      await dismissOpenLayers(this.page);
-      await submit.click();
-    });
+    // Extend submits through the shared generation control (accessible name
+    // "Start generation" in the redesigned Flow).
+    await activateGenerationSubmit(this.page);
 
     await this.waitForTimelineGrowth(before, timeoutMs, `extend "${prompt.slice(0, 40)}"`);
     await dismissOpenLayers(this.page);

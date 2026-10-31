@@ -5,7 +5,13 @@ import { artifactBasename, writeArtifactMetadata } from "../output/artifacts.js"
 import { downloadResult } from "./download.js";
 import { flowLocators } from "./locators.js";
 import type { EditAutomation, EditMediaInput, EditMediaResult, ProjectMedia } from "./types.js";
-import { addFromProject, projectSubUrl, resolveExistingProject, uploadMedia } from "./ui.js";
+import {
+  activateGenerationSubmit,
+  addIngredientFromProject,
+  projectSubUrl,
+  resolveExistingProject,
+  uploadIngredientMedia
+} from "./ui.js";
 
 export class EditPage implements EditAutomation {
   constructor(private readonly page: Page) {}
@@ -19,6 +25,23 @@ export class EditPage implements EditAutomation {
       const results: Array<{ id: string; type: "image" | "video"; src: string; name?: string }> = [];
       const seen = new Set<string>();
 
+      // Redesigned grid: flow-image-tile / flow-video-tile elements carry the stable
+      // id in data-media-id.
+      for (const [selector, type] of [["flow-image-tile img[data-media-id]", "image"], ["flow-video-tile [data-media-id]", "video"]] as const) {
+        for (const el of [...document.querySelectorAll(selector)]) {
+          const id = el.getAttribute("data-media-id");
+          const src = (el as HTMLImageElement).currentSrc || el.getAttribute("src") || "";
+          if (!id || !src || seen.has(id)) continue;
+          seen.add(id);
+          const alt = (el as HTMLImageElement).alt?.trim();
+          const name = alt && !/tile displaying|option|generated image|user profile/i.test(alt) ? alt : undefined;
+          results.push({ id, type, src, name });
+        }
+      }
+
+      if (results.length > 0) return results;
+
+      // Legacy/fixture sources: authenticated media URLs.
       for (const img of [...document.querySelectorAll("img")] as HTMLImageElement[]) {
         const src = img.currentSrc || img.src;
         if (!/media\.getMediaUrlRedirect/.test(src) || /mediaUrlType=/.test(src)) continue;
@@ -27,11 +50,8 @@ export class EditPage implements EditAutomation {
         const id = match[1];
         if (seen.has(id)) continue;
         seen.add(id);
-        const alt = img.alt?.trim();
-        const name = alt && !/generated image|user profile/i.test(alt) ? alt : undefined;
-        results.push({ id, type: "image", src, name });
+        results.push({ id, type: "image", src });
       }
-
       for (const vid of [...document.querySelectorAll("video")] as HTMLVideoElement[]) {
         const src = vid.currentSrc || vid.src;
         if (!/media\.getMediaUrlRedirect/.test(src)) continue;
@@ -42,7 +62,6 @@ export class EditPage implements EditAutomation {
         seen.add(id);
         results.push({ id, type: "video", src });
       }
-
       return results;
     });
   }
@@ -59,10 +78,19 @@ export class EditPage implements EditAutomation {
 
     await this.openMediaForEdit(mediaSrc);
 
-    for (const file of input.referenceImages) await uploadMedia(this.page, /upload|add/i, file);
-    for (const ref of input.fromProject) await addFromProject(this.page, /add from project/i, ref);
+    // Reference media now goes through the prompt-bar ingredient picker (the
+    // redesigned Flow has one unified media browser for uploads and project assets).
+    for (const file of input.referenceImages) await uploadIngredientMedia(this.page, file);
+    for (const ref of input.fromProject) {
+      const picked = await addIngredientFromProject(this.page, ref);
+      if (!picked) {
+        throw new GenerationFailedError(`Reference "${ref}" was not found in the Flow ingredient picker.`);
+      }
+      await this.page.keyboard.press("Escape").catch(() => undefined);
+      await this.page.waitForTimeout(400);
+    }
 
-    const editBox = this.page.locator('[role="textbox"][contenteditable="true"]').first();
+    const editBox = flowLocators(this.page).promptBox.first();
     await editBox.waitFor({ state: "visible", timeout: 15000 });
     await editBox.click();
     await editBox.press("ControlOrMeta+a").catch(() => undefined);
@@ -71,8 +99,7 @@ export class EditPage implements EditAutomation {
 
     const locators = flowLocators(this.page);
     const before = new Set(await this.resultSrcs());
-    const submit = this.page.locator("button").filter({ hasText: /arrow_forward/ }).first();
-    await submit.click();
+    await activateGenerationSubmit(this.page);
 
     const newSrcs = await this.waitForResults(before, (input.timeout ?? 900) * 1000, locators);
 
@@ -103,6 +130,13 @@ export class EditPage implements EditAutomation {
 
   private async findMediaById(mediaId: string): Promise<string | undefined> {
     return this.page.evaluate((id) => {
+      // Redesigned grid: the stable id lives in data-media-id.
+      const el = [...document.querySelectorAll("[data-media-id]")].find((e) => e.getAttribute("data-media-id") === id);
+      if (el) {
+        const media = el.matches("img,video") ? el : el.querySelector("img,video");
+        const src = media ? (media as HTMLImageElement).currentSrc || media.getAttribute("src") || "" : "";
+        if (src) return src;
+      }
       for (const img of [...document.querySelectorAll("img")] as HTMLImageElement[]) {
         const src = img.currentSrc || img.src;
         if (src.includes(id)) return src;

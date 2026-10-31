@@ -128,6 +128,7 @@ async function downloadViaMenu(input: DownloadInput): Promise<DownloadOutput | u
     page.waitForEvent("download", { timeout: 180000 }),
     page.locator('[data-gflow-dl="1"]').first().click()
   ]);
+  await page.evaluate(() => document.querySelector('[data-gflow-dl="1"]')?.removeAttribute("data-gflow-dl"));
   return saveDownload(input, download);
 }
 

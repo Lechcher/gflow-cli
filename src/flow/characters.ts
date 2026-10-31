@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import { GenerationBlockedError, GenerationFailedError } from "../errors.js";
 import type { CharacterAutomation, CharacterResult, CharacterSummary, CreateCharacterInput } from "./types.js";
-import { addFromProject, navigateToProject, pickModel, projectSubUrl, uploadMedia } from "./ui.js";
+import { activateGenerationSubmit, addIngredientFromProject, navigateToProject, pickModel, projectSubUrl, uploadIngredientMedia } from "./ui.js";
 import { flowLocators } from "./locators.js";
 
 const PRESET_LABEL: Record<NonNullable<CreateCharacterInput["preset"]>, RegExp> = {
@@ -28,8 +28,17 @@ export class CharacterPage implements CharacterAutomation {
     }
     if (input.model) await pickModel(this.page, input.model);
 
-    for (const file of input.images) await uploadMedia(this.page, /^upload/i, file);
-    for (const ref of input.fromProject) await addFromProject(this.page, /add from project/i, ref);
+    // Character reference images go through the prompt-bar ingredient picker,
+    // the unified media browser in the redesigned Flow.
+    for (const file of input.images) await uploadIngredientMedia(this.page, file);
+    for (const ref of input.fromProject) {
+      const picked = await addIngredientFromProject(this.page, ref);
+      if (!picked) {
+        throw new GenerationFailedError(`Reference "${ref}" was not found in the Flow ingredient picker.`);
+      }
+      await this.page.keyboard.press("Escape").catch(() => undefined);
+      await this.page.waitForTimeout(400);
+    }
 
     const box = locators.characterPrompt.first();
     await box.click();
@@ -39,7 +48,7 @@ export class CharacterPage implements CharacterAutomation {
 
     await this.assertNotBlocked();
     const before = new Set(await this.characterThumbs());
-    await locators.characterCreateButton.first().click();
+    await activateGenerationSubmit(this.page);
 
     const added = await this.waitForNewCharacter(before, (input.timeout ?? 600) * 1000);
 

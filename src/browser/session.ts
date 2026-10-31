@@ -309,7 +309,9 @@ export async function launchLoginChrome(profile: string): Promise<string> {
 }
 
 function pickFlowPage(context: BrowserContext): Page | undefined {
-  return context.pages().find((page) => page.url().includes("labs.google"));
+  // The redesigned Flow lives at flow.google.com (labs.google redirects there);
+  // accept either host so an older tab is preferred over a blank page.
+  return context.pages().find((page) => page.url().includes("flow.google.com") || page.url().includes("labs.google"));
 }
 
 // Bundled-Chromium path, kept for local fixtures/tests (`--browser chromium`). Real Google

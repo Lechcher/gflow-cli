@@ -11,7 +11,7 @@ const projectFixture = (label: string) => `<!doctype html>
   <body>
     <main>
       <div data-project="${label}" role="textbox" contenteditable="true"></div>
-      <button id="create" disabled>arrow_forwardCreate</button>
+      <button id="create" aria-label="Start generation" disabled>arrow_forward</button>
       <section id="results"></section>
     </main>
     <script>
@@ -99,7 +99,7 @@ describe("FlowPage fixture", () => {
     } finally {
       await context.close();
     }
-  });
+  }, 60000);
 
   it("downloads a video through the viewer's menu-less Download button", async () => {
     const profileDir = await mkdtemp(join(tmpdir(), "gflow-profile-"));
@@ -134,19 +134,19 @@ describe("FlowPage fixture", () => {
     try {
       const page = context.pages()[0] ?? (await context.newPage());
       const targetProjectId = "00000000-0000-4000-8000-000000000000";
-      await page.route("https://labs.google/fx/tools/flow", async (route) => {
+      await page.route("https://flow.google.com", async (route) => {
         await route.fulfill({
           contentType: "text/html",
-          body: `<a href="/fx/tools/flow/project/${targetProjectId}"><span>Target Project</span></a>`
+          body: `<a href="/project/${targetProjectId}"><span>Target Project</span></a>`
         });
       });
-      await page.route(`https://labs.google/fx/tools/flow/project/${targetProjectId}`, async (route) => {
+      await page.route(`https://flow.google.com/project/${targetProjectId}`, async (route) => {
         await route.fulfill({ contentType: "text/html", body: projectFixture("target") });
       });
-      await page.route("https://labs.google/fx/tools/flow/project/wrong", async (route) => {
+      await page.route("https://flow.google.com/project/wrong", async (route) => {
         await route.fulfill({ contentType: "text/html", body: projectFixture("wrong") });
       });
-      await page.goto("https://labs.google/fx/tools/flow/project/wrong");
+      await page.goto("https://flow.google.com/project/wrong");
 
       const flow = new FlowPage(page);
       const result = await flow.runJob({

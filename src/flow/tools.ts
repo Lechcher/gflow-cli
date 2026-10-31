@@ -1,7 +1,7 @@
 import type { Page } from "playwright";
 import { GenerationBlockedError } from "../errors.js";
 import type { CreateToolInput, ToolAutomation, ToolResult, ToolSummary } from "./types.js";
-import { navigateToProject, projectSubUrl } from "./ui.js";
+import { activateGenerationSubmit, navigateToProject, projectSubUrl } from "./ui.js";
 
 const TOOL_PRESET_LABEL: Record<NonNullable<CreateToolInput["preset"]>, RegExp> = {
   "image-filter": /Image Filter/i,
@@ -15,6 +15,8 @@ export class ToolPage implements ToolAutomation {
 
   async createTool(input: CreateToolInput): Promise<ToolResult> {
     const projectId = await navigateToProject(this.page, input.project);
+    // The redesigned Flow keeps the tool deep links on the new origin
+    // (/project/<id>/create-tool, verified in the left rail).
     await this.page.goto(projectSubUrl(projectId, "create-tool"), { waitUntil: "domcontentloaded" });
     const prompt = this.page.locator('[role="textbox"][contenteditable="true"]').first();
     await prompt.waitFor({ state: "visible", timeout: 20000 });
@@ -30,8 +32,9 @@ export class ToolPage implements ToolAutomation {
       throw new GenerationBlockedError("Flow blocked this tool description.");
     }
 
-    const create = this.page.locator("button").filter({ hasText: /arrow_forward/ }).filter({ hasText: /create/i }).first();
-    await create.click();
+    // The tool page submits through the same shared control as every other
+    // generation surface (accessible name "Start generation").
+    await activateGenerationSubmit(this.page);
     // Building an applet can take a while; it ends by navigating into the tool.
     await this.page.waitForURL(/\/(tool|tools)\//i, { timeout: 180000 }).catch(() => undefined);
     return { name: input.name ?? input.prompt.slice(0, 32), flowUrl: this.page.url() };
