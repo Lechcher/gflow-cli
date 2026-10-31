@@ -11,6 +11,9 @@ name: Release
 on:
   push:
     branches: [main]
+  # Manual release runs (Actions are disabled by default on forks, so a push alone
+  # may not have kicked off a run yet).
+  workflow_dispatch:
 
 permissions:
   contents: write
