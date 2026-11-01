@@ -10,6 +10,7 @@ on:
     paths:
       - package.json
       - jsr.json
+      - .github/workflows/jsr.yml
 
 jobs:
   publish:
@@ -19,6 +20,12 @@ jobs:
       id-token: write # The OIDC ID token is used for authentication with JSR.
     steps:
       - uses: actions/checkout@v6
+
+      # jsr publish runs Deno with --unstable-byonm, which resolves the npm
+      # dependencies declared in package.json out of the local node_modules — without
+      # this step it fails with "Could not find 'commander' in a node_modules folder".
+      - name: Install dependencies
+        run: npm ci
 
       # jsr.json must carry a version (JSR rejects a manifest without one), and
       # package.json is the single source of truth. Re-pin before publishing or JSR
