@@ -1,0 +1,38 @@
+name: Publish
+
+on:
+  push:
+    branches:
+      - main
+    # JSR skips versions that are already published, so this only needs to run when
+    # the version (package.json — bumped by the Release workflow) or the JSR
+    # manifest itself changed. Keeps doc/CI pushes off the JSR runner.
+    paths:
+      - package.json
+      - jsr.json
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # The OIDC ID token is used for authentication with JSR.
+    steps:
+      - uses: actions/checkout@v6
+
+      # jsr.json must carry a version (JSR rejects a manifest without one), and
+      # package.json is the single source of truth. Re-pin before publishing or JSR
+      # would keep republishing whatever version jsr.json happened to hold.
+      - name: Sync JSR version from package.json
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const jsr = JSON.parse(fs.readFileSync("jsr.json", "utf8"));
+            jsr.version = pkg.version;
+            fs.writeFileSync("jsr.json", JSON.stringify(jsr, null, 2) + "\n");
+          '
+          echo "Publishing @lechcher/gflow-cli@$(node -p 'require("./package.json").version')"
+
+      - name: Publish package
+        run: npx jsr publish

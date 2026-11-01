@@ -15,18 +15,22 @@ const baseJobSchema = z.object({
   upscale: z.enum(["2k", "4k"]).optional()
 });
 
-export const imageJobSchema = baseJobSchema.extend({
+// Internal schemas (not part of the module's public API): their inferred zod types
+// would otherwise leak into exported signatures, which every other registry cares
+// about far less than JSR does — JSR requires every public symbol to carry an
+// explicit type, and these extend-chains resolve only through inference.
+const imageJobSchema = baseJobSchema.extend({
   type: z.literal("image")
 });
 
-export const videoJobSchema = baseJobSchema.extend({
+const videoJobSchema = baseJobSchema.extend({
   type: z.literal("video"),
   duration: z.number().int().min(1).max(30).optional(),
   startFrame: z.string().min(1).optional(),
   endFrame: z.string().min(1).optional()
 });
 
-export const jobSchema = z.discriminatedUnion("type", [imageJobSchema, videoJobSchema]);
+const jobSchema = z.discriminatedUnion("type", [imageJobSchema, videoJobSchema]);
 
 export const UPSCALE_TIERS = ["2k", "4k"] as const;
 
@@ -34,9 +38,41 @@ export const batchSchema = z.object({
   jobs: z.array(jobSchema).min(1)
 });
 
-export type ImageJob = z.infer<typeof imageJobSchema>;
-export type VideoJob = z.infer<typeof videoJobSchema>;
-export type GFlowJob = z.infer<typeof jobSchema>;
+// Explicit job shapes (mirroring the schemas above; tsc fails if they drift).
+export interface ImageJob {
+  id: string;
+  project?: string;
+  prompt: string;
+  model?: string;
+  ratio?: string;
+  outputs: number;
+  out: string;
+  timeout?: number;
+  ingredients: string[];
+  character: string[];
+  upscale?: "2k" | "4k";
+  type: "image";
+}
+
+export interface VideoJob {
+  id: string;
+  project?: string;
+  prompt: string;
+  model?: string;
+  ratio?: string;
+  outputs: number;
+  out: string;
+  timeout?: number;
+  ingredients: string[];
+  character: string[];
+  upscale?: "2k" | "4k";
+  type: "video";
+  duration?: number;
+  startFrame?: string;
+  endFrame?: string;
+}
+
+export type GFlowJob = ImageJob | VideoJob;
 export type BatchFile = z.infer<typeof batchSchema>;
 
 export function parseImageJob(value: unknown): ImageJob {
