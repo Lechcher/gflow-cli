@@ -1,0 +1,5 @@
+schema: spec-driven
+created: 2026-11-02
+# Pure documentation change: JSDoc comments on the published entrypoint.
+# No runtime behavior changes, so no spec delta — the specs artifact is skipped.
+skip_specs: true

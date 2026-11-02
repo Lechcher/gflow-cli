@@ -16,12 +16,24 @@ import { parseAgentInstruction, parseAgentRun, parseAgentSettings, parseBatchYam
 import { compositeAutomation, runJobs } from "./jobs/runner.js";
 import { resolveOutputDir } from "./config/paths.js";
 
+/**
+ * Injection points for {@link createProgram}. Every field is optional; when a
+ * field is omitted the corresponding command drives the real Google Flow
+ * browser automation. The test suite embeds the CLI by injecting fakes here
+ * (see `tests/cli.test.ts`).
+ */
 export interface CreateProgramOptions {
+  /** Image/video creation surface (`FlowPage`) behind `gflow image`, `gflow video`, and `gflow batch`'s image/video jobs. */
   automation?: FlowAutomation;
+  /** Character surface (`CharacterPage`) behind `gflow character`. */
   characterAutomation?: CharacterAutomation;
+  /** Tool surface (`ToolPage`) behind `gflow tool`. */
   toolAutomation?: ToolAutomation;
+  /** Agent surface (`AgentPage`) behind `gflow agent` and `gflow batch`'s agent jobs. */
   agentAutomation?: AgentAutomation;
+  /** Edit surface (`EditPage`) behind `gflow edit`. */
   editAutomation?: EditAutomation;
+  /** Scenebuilder surface (`ScenePage`) behind `gflow extend` and `gflow scene`. */
   sceneAutomation?: SceneAutomation;
 }
 
@@ -60,9 +72,14 @@ function commandOption<T>(command: unknown, key: string): T | undefined {
   return undefined;
 }
 
-// Read the CLI version from package.json so `--version` never drifts from the package.
-// Dev runs this file from src/ (package.json one level up); the build runs it from
-// dist/src/ (two levels up), so try both anchors relative to this module.
+/**
+ * Read the CLI version from `package.json` so `--version` never drifts from the
+ * published package. Two anchors are probed relative to this module because dev
+ * runs from `src/` (package.json one level up) while the build runs from
+ * `dist/src/` (two levels up).
+ *
+ * @returns the package version, or `"0.0.0"` when no package.json can be read.
+ */
 export function resolveVersion(): string {
   const here = dirname(fileURLToPath(import.meta.url));
   for (const rel of ["../package.json", "../../package.json"]) {
@@ -151,6 +168,40 @@ async function realEditAutomation(profile: string, headed: boolean, browser: Bro
   return { automation: new EditPage(session.page), close: () => session.close() };
 }
 
+/**
+ * Build the `gflow` commander program with every top-level command wired up:
+ * `auth`, `doctor`, `image`, `video`, `agent`, `batch`, `character`, `edit`,
+ * `extend`, `scene`, `tool`, and `media`. Each command drives the Google Flow
+ * browser automation unless an injected fake replaces its surface.
+ *
+ * @param options optional automation fakes — see {@link CreateProgramOptions}.
+ * Ordinary consumers pass nothing and gflow drives the real signed-in Chrome
+ * profile; tests (and other embedders) inject fakes so no browser is needed.
+ * @returns the configured commander program, ready for `parseAsync`.
+ *
+ * @example Parse a real command line
+ * ```ts
+ * import { createProgram } from "@lechcher/gflow-cli";
+ *
+ * await createProgram().parseAsync([
+ *   "node", "gflow", "image", "--prompt", "a neon-lit alley at night"
+ * ]);
+ * ```
+ *
+ * @example Run against an injected fake automation
+ * ```ts
+ * import { createProgram } from "@lechcher/gflow-cli";
+ *
+ * const program = createProgram({
+ *   automation: {
+ *     async runJob(input) {
+ *       return { jobId: input.job.id, artifacts: [], flowUrl: "https://flow.google.com" };
+ *     }
+ *   }
+ * });
+ * await program.parseAsync(["node", "gflow", "video", "--prompt", "rain on the alley"]);
+ * ```
+ */
 export function createProgram(options: CreateProgramOptions = {}): Command {
   const program = new Command();
   program.name("gflow").description("Local browser automation CLI for Google Flow.").version(resolveVersion());
@@ -657,6 +708,30 @@ export function createProgram(options: CreateProgramOptions = {}): Command {
   return program;
 }
 
+/**
+ * Execute one CLI invocation end to end: build the program (real automations),
+ * parse `argv`, and map the outcome to a process exit code.
+ *
+ * @param argv the full argument vector as received by the process, including
+ * the `node` runtime and script path (typically `process.argv`).
+ * @returns the exit code — 0 on success, the command's own code for
+ * help/version/invalid-argument, or a code derived from the thrown error
+ * (login required 2, UI contract change 3, blocked generation 4, and so on).
+ *
+ * @example Use as the binary entrypoint
+ * ```ts
+ * import { runCli } from "@lechcher/gflow-cli";
+ *
+ * process.exitCode = await runCli(process.argv);
+ * ```
+ *
+ * @example Drive it from a test
+ * ```ts
+ * import { runCli } from "@lechcher/gflow-cli";
+ *
+ * const code = await runCli(["node", "gflow", "doctor"]);
+ * ```
+ */
 export async function runCli(argv: string[]): Promise<number> {
   const program = createProgram();
   try {
