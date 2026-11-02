@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The version-bump commit is pushed with GITHUB_TOKEN, which GitHub never triggers
     # workflows for; this guard is belt-and-braces against a manually replayed event.
     if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
