@@ -44,5 +44,7 @@ jobs:
           '
           echo "Publishing @lechcher/gflow-cli@$(node -p 'require("./package.json").version')"
 
+      # --allow-dirty: the sync step above intentionally rewrites jsr.json in the
+      # workspace, and JSR refuses to publish a tree with uncommitted changes.
       - name: Publish package
-        run: npx jsr publish
+        run: npx jsr publish --allow-dirty
