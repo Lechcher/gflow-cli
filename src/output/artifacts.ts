@@ -24,6 +24,12 @@ export interface ArtifactMetadata {
   requestedOutputs: number;
   quality?: "original" | "2k" | "4k";
   characters?: string[];
+  /** Media attached to the chat turn for this run, as requested (paths and names). */
+  attachments?: {
+    photos: string[];
+    videos: string[];
+    fromProject: string[];
+  };
   downloadedAt: string;
   source: "google-flow-browser";
   flowUrl: string;

@@ -70,6 +70,11 @@ export class FlowPage implements FlowAutomation {
   }
 
   async runJob(input: FlowAutomationRunInput): Promise<FlowJobResult> {
+    // Agent jobs belong to the agent surface; the batch router sends them there.
+    // Reaching this branch means routing was bypassed.
+    if (input.job.type === "agent") {
+      throw new UiContractError("Agent jobs must be run through the agent automation, not the image/video surface.");
+    }
     const locators = flowLocators(this.page);
     if (input.job.project) {
       await navigateToProject(this.page, input.job.project);
@@ -183,6 +188,7 @@ export class FlowPage implements FlowAutomation {
   // Video duration: Flow exposes no duration control (verified live), so `--duration`
   // is accepted and recorded in metadata but not enforced.
   private async applySettings(job: GFlowJob): Promise<void> {
+    if (job.type === "agent") return; // agent jobs have no create-surface settings
     const settings = flowLocators(this.page).settingsButton.first();
     if (!(await settings.count())) return;
 

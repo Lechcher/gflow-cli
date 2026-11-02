@@ -11,6 +11,7 @@ import type {
 import {
   activateGenerationSubmit,
   agentSettingChecked,
+  attachChatMedia,
   closeAgentSettings,
   closeIngredientPicker,
   collectResultMedia,
@@ -22,7 +23,8 @@ import {
   pickModelInAgentSection,
   projectSubUrl,
   saveAgentSettings,
-  setConfirmBeforeGenerating
+  setConfirmBeforeGenerating,
+  verifyChatAttachments
 } from "./ui.js";
 
 export class AgentPage implements AgentAutomation {
@@ -127,6 +129,19 @@ export class AgentPage implements AgentAutomation {
   async runAgent(input: RunAgentInput): Promise<FlowJobResult> {
     await this.openAgent(input.project);
     const locators = flowLocators(this.page);
+
+    // Attach requested media to the chat turn first (the ingredient row belongs
+    // to the draft), and verify it landed before spending a generation.
+    const requested = (input.photos?.length ?? 0) + (input.videos?.length ?? 0) + (input.fromProject?.length ?? 0);
+    if (requested > 0) {
+      await attachChatMedia(this.page, {
+        photos: input.photos ?? [],
+        videos: input.videos ?? [],
+        fromProject: input.fromProject ?? []
+      });
+      await verifyChatAttachments(this.page, requested);
+    }
+
     const box = locators.promptBox.first();
     await box.click();
     await box.press("ControlOrMeta+a").catch(() => undefined);
@@ -154,8 +169,12 @@ export class AgentPage implements AgentAutomation {
       const type: "image" | "video" = /\.mp4|video/i.test(newSrcs[index]) ? "video" : "image";
       const { assetPath } = await downloadResult({ page: this.page, context, src: newSrcs[index], type, quality: "original", outDir: input.outDir, basename });
       const metadataPath = join(input.outDir, `${basename}.json`);
+      const attachments = requested > 0
+        ? { photos: input.photos ?? [], videos: input.videos ?? [], fromProject: input.fromProject ?? [] }
+        : undefined;
       await writeArtifactMetadata(metadataPath, {
         jobId: input.id, type, prompt: input.prompt, requestedOutputs: newSrcs.length, quality: "original",
+        ...(attachments ? { attachments } : {}),
         downloadedAt: new Date().toISOString(), source: "google-flow-browser", flowUrl: this.page.url(), status: "downloaded"
       });
       artifacts.push({ path: assetPath, metadataPath });

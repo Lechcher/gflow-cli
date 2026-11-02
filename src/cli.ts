@@ -13,7 +13,7 @@ import { EditPage } from "./flow/edit.js";
 import { ScenePage } from "./flow/scene.js";
 import { ToolPage } from "./flow/tools.js";
 import { parseAgentInstruction, parseAgentRun, parseAgentSettings, parseBatchYaml, parseCharacter, parseEditMedia, parseExtendScene, parseImageJob, parseTool, parseVideoJob } from "./jobs/schema.js";
-import { runJobs } from "./jobs/runner.js";
+import { compositeAutomation, runJobs } from "./jobs/runner.js";
 import { resolveOutputDir } from "./config/paths.js";
 
 export interface CreateProgramOptions {
@@ -124,6 +124,19 @@ async function realAgentAutomation(profile: string, headed: boolean, browser: Br
   const session = await openBrowserSession({ profile, headed, browser });
   await session.page.goto(FLOW_URL, { waitUntil: "domcontentloaded" }).catch(() => undefined);
   return { automation: new AgentPage(session.page), close: () => session.close() };
+}
+
+// Batch pipelines can mix create jobs and agent jobs, so they run both surfaces
+// against one browser session.
+async function realBatchAutomations(profile: string, headed: boolean, browser: BrowserChannel): Promise<{
+  flow: FlowAutomation;
+  agent: AgentAutomation;
+  close(): Promise<void>;
+}> {
+  const session = await openBrowserSession({ profile, headed, browser });
+  const flow = new FlowPage(session.page);
+  await flow.open();
+  return { flow, agent: new AgentPage(session.page), close: () => session.close() };
 }
 
 async function realSceneAutomation(profile: string, headed: boolean, browser: BrowserChannel): Promise<{ automation: SceneAutomation; close(): Promise<void> }> {
@@ -292,15 +305,15 @@ export function createProgram(options: CreateProgramOptions = {}): Command {
     .action(async (file, command) => {
       const batch = parseBatchYaml(await readFile(file, "utf8"));
       const outDir = resolveOutputDir(command.out);
-      const owned = options.automation
-        ? { automation: options.automation, close: async () => undefined }
-        : await realAutomation(command.profile, command.headed, command.browser);
+      const owned = options.automation || options.agentAutomation
+        ? { flow: options.automation, agent: options.agentAutomation, close: async () => undefined }
+        : await realBatchAutomations(command.profile, command.headed, command.browser);
       try {
         await runJobs({
           jobs: batch.jobs.map((job) => ({ ...job, out: command.out })),
           outDir,
           continueOnFailure: command.continueOnFailure,
-          automation: owned.automation
+          automation: compositeAutomation(owned.flow, owned.agent)
         });
       } finally {
         await owned.close();
@@ -404,13 +417,24 @@ export function createProgram(options: CreateProgramOptions = {}): Command {
   withSessionOptions(agent)
     .option("--prompt <text>", "agent prompt")
     .option("--id <id>", "job id for outputs", "agent")
+    .option("--photo <path...>", "local photo(s) to attach to the chat")
+    .option("--video <path...>", "local video(s) to attach to the chat")
+    .option("--from-project <name...>", "project media asset name(s) to attach to the chat")
     .option("--out <path>", "output directory", "./gflow-output")
     .action(async (command) => {
       if (!command.prompt) {
         agent.help();
         return;
       }
-      const spec = parseAgentRun({ id: command.id, prompt: command.prompt, project: command.project, out: command.out });
+      const spec = parseAgentRun({
+        id: command.id,
+        prompt: command.prompt,
+        project: command.project,
+        out: command.out,
+        photos: (command.photo ?? []).map((p: string) => resolve(process.cwd(), p)),
+        videos: (command.video ?? []).map((p: string) => resolve(process.cwd(), p)),
+        fromProject: command.fromProject ?? []
+      });
       const owned = options.agentAutomation
         ? { automation: options.agentAutomation, close: async () => undefined }
         : await realAgentAutomation(command.profile, command.headed, command.browser);

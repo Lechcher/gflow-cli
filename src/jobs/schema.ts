@@ -30,7 +30,21 @@ const videoJobSchema = baseJobSchema.extend({
   endFrame: z.string().min(1).optional()
 });
 
-const jobSchema = z.discriminatedUnion("type", [imageJobSchema, videoJobSchema]);
+// Agent jobs run the Flow Agent with optional chat media; kept internal like the
+// other job schemas (their inferred types must not leak into the public API).
+const agentJobSchema = z.object({
+  type: z.literal("agent"),
+  id: z.string().min(1).regex(/^[a-zA-Z0-9._-]+$/),
+  prompt: z.string().min(1),
+  project: z.string().min(1).optional(),
+  out: z.string().min(1).default("./gflow-output"),
+  timeout: z.number().int().min(1).optional(),
+  photos: z.array(z.string().min(1)).default([]),
+  videos: z.array(z.string().min(1)).default([]),
+  fromProject: z.array(z.string().min(1)).default([])
+});
+
+const jobSchema = z.discriminatedUnion("type", [imageJobSchema, videoJobSchema, agentJobSchema]);
 
 export const UPSCALE_TIERS = ["2k", "4k"] as const;
 
@@ -72,7 +86,19 @@ export interface VideoJob {
   endFrame?: string;
 }
 
-export type GFlowJob = ImageJob | VideoJob;
+export interface AgentJob {
+  id: string;
+  type: "agent";
+  prompt: string;
+  project?: string;
+  out: string;
+  timeout?: number;
+  photos: string[];
+  videos: string[];
+  fromProject: string[];
+}
+
+export type GFlowJob = ImageJob | VideoJob | AgentJob;
 export type BatchFile = z.infer<typeof batchSchema>;
 
 export function parseImageJob(value: unknown): ImageJob {
@@ -137,7 +163,10 @@ export const agentRunSchema = z.object({
   prompt: z.string().min(1),
   project: z.string().min(1).optional(),
   out: z.string().min(1).default("./gflow-output"),
-  timeout: z.number().int().min(1).optional()
+  timeout: z.number().int().min(1).optional(),
+  photos: z.array(z.string().min(1)).default([]),
+  videos: z.array(z.string().min(1)).default([]),
+  fromProject: z.array(z.string().min(1)).default([])
 });
 export type AgentSettingsSpec = z.infer<typeof agentSettingsSchema>;
 export type AgentInstructionSpec = z.infer<typeof agentInstructionSchema>;

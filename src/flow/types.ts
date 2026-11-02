@@ -145,6 +145,12 @@ export interface RunAgentInput {
   project?: string;
   outDir: string;
   timeout?: number;
+  /** Local photo files to attach to the chat turn (paths on disk). */
+  photos?: string[];
+  /** Local video files to attach to the chat turn (paths on disk). */
+  videos?: string[];
+  /** Names of project media assets to attach (see `gflow media list`). */
+  fromProject?: string[];
 }
 export interface AgentAutomation {
   runAgent(input: RunAgentInput): Promise<FlowJobResult>;

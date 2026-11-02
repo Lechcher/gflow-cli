@@ -12,13 +12,21 @@
            <img>/<video> elements. The prompt bar is fixed to the bottom like real
            Flow, so the top-left viewer overlay can never sit over it. -->
       <div id="prompt" role="textbox" contenteditable="true" aria-label="Prompt"></div>
+      <!-- Chat ingredient bar (verified live): one flow-ingredient-chip per attached
+           media item, rendered in the composer above the prompt. -->
+      <flow-ingredient-bar id="ingredient-bar" hidden></flow-ingredient-bar>
       <div id="prompt-bar" style="position: fixed; bottom: 0; left: 0; right: 0; background: #111; color: #fff; padding: 8px; z-index: 2;">
         <button id="add" aria-label="Add ingredients to the prompt box">add</button>
         <button id="tune" aria-label="Settings"><i>tune</i></button>
         <button id="create" aria-label="Start generation" disabled>arrow_forward</button>
       </div>
-      <!-- Ingredient picker: selection-based tab panel with an upload control. -->
-      <div id="picker" role="tablist" hidden>
+      <!-- Ingredient picker: a CDP overlay pane (as in live Flow) holding a tab panel
+           with an upload control. Live Flow lists assets as tiles and exposes ONE
+           "Add to prompt" control for the selected tile (select-tile → add); the
+           older role=option tiles attach directly and serve the character/reference
+           surfaces. -->
+      <div class="cdk-overlay-pane" id="picker-pane">
+       <div id="picker" role="tablist" hidden>
         <div role="tab">All</div>
         <div role="tab">Images</div>
         <div role="tab">Videos</div>
@@ -28,7 +36,17 @@
         <div id="picker-assets">
           <div role="option">Untitled Character</div>
           <div role="option">storyboard-frame.png</div>
+          <div class="asset-tile" data-name="Dolly over misty lake">
+            <div class="asset-text"><span class="asset-title">Dolly over misty lake</span><span class="type-subtitle">Video</span></div>
+            <button class="tile-select">Dolly over misty lake Video</button>
+          </div>
+          <div class="asset-tile" data-name="alley-ref.png">
+            <div class="asset-text"><span class="asset-title">alley-ref.png</span><span class="type-subtitle">Image</span></div>
+            <button class="tile-select">alley-ref.png Image</button>
+          </div>
         </div>
+        <button id="add-to-prompt">Add to prompt</button>
+       </div>
       </div>
       <!-- Agent settings dialog: per-type default sections, confirm radios, Save. -->
       <div id="settings" role="dialog" aria-modal="true" hidden>
@@ -176,7 +194,82 @@
       }
 
       // --- Ingredient picker behavior ---
+      const bar = document.getElementById("ingredient-bar");
+      // Attach a media item: add a chip to the ingredient bar (live: one chip per
+      // attachment, no filename text on the chip).
+      const attachChip = (label, kind) => {
+        // Keep the older "attached names" signal in sync for existing assertions.
+        const prompt = document.getElementById("prompt");
+        const names = (prompt.dataset.attached ?? "").split("|").filter(Boolean);
+        names.push(label);
+        prompt.dataset.attached = names.join("|");
+        const chip = document.createElement("flow-ingredient-chip");
+        chip.className = "reference-ingredient-chip";
+        chip.dataset.attached = label;
+        const inner = document.createElement(`flow-${kind}-ingredient-chip`);
+        const btn = document.createElement("button");
+        btn.className = "chip-container";
+        btn.setAttribute("aria-label", "Ingredient");
+        const img = document.createElement("img");
+        img.alt = kind === "video" ? "Video ingredient image" : "Ingredient image";
+        btn.appendChild(img);
+        inner.appendChild(btn);
+        chip.appendChild(inner);
+        bar.appendChild(chip);
+        bar.hidden = false;
+      };
+      // Live-style asset tiles: clicking a tile SELECTS it; the picker's single
+      // "Add to prompt" control attaches the selection.
+      let selectedAsset = null;
+      const selectTile = (tile) => {
+        selectedAsset = tile.dataset.name;
+        for (const t of document.querySelectorAll(".asset-tile")) t.removeAttribute("data-selected");
+        tile.setAttribute("data-selected", "true");
+      };
+      for (const tile of document.querySelectorAll(".asset-tile")) {
+        tile.querySelector(".tile-select").addEventListener("click", () => selectTile(tile));
+      }
+      document.getElementById("add-to-prompt").addEventListener("click", () => {
+        if (!selectedAsset) return;
+        attachChip(selectedAsset, /\.(mp4|mov)$/i.test(selectedAsset) ? "video" : "image");
+        // Live Flow closes the picker after an attach.
+        picker.hidden = true;
+      });
       document.getElementById("add").addEventListener("click", () => { picker.hidden = false; });
+      // Live Flow dismisses the picker with Escape.
+      document.addEventListener("keydown", (e) => { if (e.key === "Escape") picker.hidden = true; });
+      // Upload: a real file input; the accepted upload becomes an asset tile titled
+      // by filename, exactly as Flow does live. `?silent-upload=video` models Flow's
+      // current behavior of silently ignoring uploaded video files.
+      document.getElementById("upload-media").addEventListener("click", () => {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.style.display = "none";
+        document.body.appendChild(input);
+        input.addEventListener("change", () => {
+          const name = input.files?.[0]?.name ?? "uploaded-asset";
+          if (params.get("silent-upload") === "video" && /\.(mp4|mov)$/i.test(name)) {
+            // Flow accepts the file but never surfaces an asset: no tile, no chip.
+            input.remove();
+            return;
+          }
+          const tile = document.createElement("div");
+          tile.className = "asset-tile";
+          tile.dataset.name = name;
+          tile.innerHTML = `<div class="asset-text"><span class="asset-title">${name}</span></div><button class="tile-select">${name} Image</button>`;
+          document.getElementById("picker-assets").appendChild(tile);
+          tile.querySelector(".tile-select").addEventListener("click", () => selectTile(tile));
+          // Legacy surfaces (frames/edit/characters uploads) still select a
+          // role=option tile; provide one so both structures stay exercisable.
+          const legacy = document.createElement("div");
+          legacy.setAttribute("role", "option");
+          legacy.textContent = name;
+          legacy.addEventListener("click", () => attachChip(name, "image"));
+          document.getElementById("picker-assets").appendChild(legacy);
+          input.remove();
+        });
+        input.click();
+      });
       // Seeded tiles behave like selected assets: clicking attaches them to the prompt.
       for (const tile of picker.querySelectorAll("[role=option]")) {
         tile.addEventListener("click", () => {

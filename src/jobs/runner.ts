@@ -9,7 +9,7 @@ import {
   UiContractError,
   messageForError
 } from "../errors.js";
-import type { FlowAutomation, FlowJobResult } from "../flow/types.js";
+import type { AgentAutomation, FlowAutomation, FlowJobResult } from "../flow/types.js";
 import type { GFlowJob } from "./schema.js";
 
 type JobStatus = "pending" | "running" | "completed" | "failed";
@@ -53,6 +53,41 @@ async function writeRunState(outDir: string, jobs: RunJobRecord[]): Promise<void
     `${JSON.stringify({ source: "google-flow-browser", jobs }, null, 2)}\n`,
     "utf8"
   );
+}
+
+// Route batch jobs to the automation that owns them: image/video jobs to the
+// create surface, agent jobs to the agent surface (which also attaches chat
+// media). Both run in the same browser session, so a pipeline can mix them.
+// A pipeline that declares a job type its caller did not provide an automation
+// for fails that job loudly instead of silently skipping it.
+export function compositeAutomation(
+  flow: FlowAutomation | undefined,
+  agent: AgentAutomation | undefined
+): FlowAutomation {
+  return {
+    async runJob(input): Promise<FlowJobResult> {
+      if (input.job.type === "agent") {
+        if (!agent) {
+          throw new UiContractError("This pipeline declares an agent job, but no agent automation is available in this context.");
+        }
+        const job = input.job;
+        return agent.runAgent({
+          id: job.id,
+          prompt: job.prompt,
+          project: job.project,
+          outDir: input.outDir,
+          timeout: job.timeout,
+          photos: job.photos,
+          videos: job.videos,
+          fromProject: job.fromProject
+        });
+      }
+      if (!flow) {
+        throw new UiContractError("This pipeline declares an image/video job, but no create automation is available in this context.");
+      }
+      return flow.runJob(input);
+    }
+  };
 }
 
 export async function runJobs(input: RunJobsInput): Promise<RunJobsResult> {

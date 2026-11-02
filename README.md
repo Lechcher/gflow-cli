@@ -237,7 +237,19 @@ jobs:
     prompt: "rain falling on the alley"
     duration: 8          # recorded only; Flow sets length by model
     startFrame: ./first.png
+  - id: hero-agent
+    type: agent          # runs the Flow Agent; media is attached to the chat turn
+    prompt: "turn the alley shot into a moody poster"
+    photos:
+      - ./alley-ref.png
+    fromProject:
+      - "Dolly over misty lake"
 ```
+
+Agent jobs accept `prompt`, `photos`, `videos`, and `fromProject` (names from
+`gflow media list`). Each requested item is attached and verified before the prompt is sent;
+if any cannot be attached, that job fails without generating and the pipeline continues only
+with `--continue-on-failure`, like every other job type.
 
 Jobs run serially. `--continue-on-failure` keeps going after ordinary generation errors.
 
@@ -346,21 +358,37 @@ gflow tool create --prompt "turn any photo into a watercolour painting" --name W
 ### `gflow agent`
 
 Drive the Flow Agent from the command line. The redesigned prompt is agent-driven, so this
-path sends a prompt and downloads whatever results appear — images or video. Results are
-downloaded at full quality.
+path sends a prompt — with optional photos, videos, and project media attached to the chat
+turn — and downloads whatever results appear, images or video, at full quality.
 
 #### `gflow agent --prompt "<text>"`
 
-| Option            | Default          | Description                     |
-| ----------------- | ---------------- | ------------------------------- |
-| `--prompt <text>` | _required_       | Prompt to send to the agent     |
-| `--id <id>`       | `agent`          | Job id used in output filenames |
-| `--out <path>`    | `./gflow-output` | Output directory                |
+| Option                 | Default          | Description                                                        |
+| ---------------------- | ---------------- | ------------------------------------------------------------------ |
+| `--prompt <text>`      | _required_       | Prompt to send to the agent                                         |
+| `--photo <path...>`    | —                | Local photo(s) to attach to the chat turn                           |
+| `--video <path...>`    | —                | Local video(s) to attach to the chat turn                           |
+| `--from-project <name...>` | —           | Project media asset name(s) to attach (find ids with `gflow media list`) |
+| `--id <id>`            | `agent`          | Job id used in output filenames                                     |
+| `--out <path>`         | `./gflow-output` | Output directory                                                    |
 
 ```bash
 gflow agent --prompt "create a moody noir poster for a jazz club"
 gflow agent --prompt "animate the poster as a short looping video" --id jazz-loop --out ./out
+
+# give the agent media to work from (photos, or assets already in the project)
+gflow agent --prompt "restyle this pack shot for a summer campaign" \
+  --photo ./pack.png --from-project "Dolly over misty lake" --id summer-pack
 ```
+
+Every requested item is attached to the chat turn and **verified before the prompt is sent** —
+if a file upload or asset name can't be attached, the run fails with an error naming it instead
+of generating without the reference. The attachments are recorded in each artifact's metadata.
+
+> **Uploads vs project assets.** Local photos upload reliably. Flow currently ignores uploaded
+> **video** files (it never surfaces them as assets), so `--video <path>` fails loudly with a
+> clear error — reference videos that already exist in the project with
+> `--from-project "<name>"` instead. Photos already in the project work the same way.
 
 #### `gflow agent settings`
 

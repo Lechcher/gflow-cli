@@ -1,6 +1,13 @@
+import { basename } from "node:path";
 import type { Locator, Page } from "playwright";
 import { UiContractError } from "../errors.js";
 import { flowLocators, RATIO_ICON } from "./locators.js";
+
+// How long an uploaded file may take to appear as an asset in the ingredient
+// picker. Small images land in ~5s (observed live); the budget is generous
+// because slow uploads exist, and a file Flow ignores fails here rather than
+// silently generating without the reference.
+const CHAT_UPLOAD_TIMEOUT_MS = 120_000;
 
 // Click the element marked with data-gflow-pick. The marking evaluate already proved the
 // element is attached, visible and sized, so when the normal click cannot pass Playwright's
@@ -703,6 +710,216 @@ export async function closeIngredientPicker(page: Page): Promise<void> {
 export async function addIngredientFromProject(page: Page, name: string): Promise<boolean> {
   await openIngredientPicker(page);
   return pickIngredientAsset(page, name);
+}
+
+// ---------------------------------------------------------------------------
+// Chat media attachment (the agent chat's ingredient bar).
+//
+// Live-verified contract (Nov 2026): the picker lists project media as tiles
+// (`.asset-title` = name; uploads are titled by filename) each with an
+// "Add to prompt" button; the picker stays open after an attach, so several
+// items attach in one session. Attached media renders in the composer as
+// `flow-ingredient-bar > flow-ingredient-chip` — one chip per attachment, with
+// no filename text on the chip (hence count-based verification).
+// ---------------------------------------------------------------------------
+
+// Find an asset tile by its visible label inside the open picker and click its
+// "Add to prompt" button. Assets may live under any tab, so `tabs` lists the
+// tabs to try in order (matched against the ligature-prefixed tab text, e.g.
+// "imageImages" via /Images$/); `null` searches the current tab.
+// Count picker tiles whose title matches `label` (used to skip re-uploading a
+// file that is already in the project).
+async function countAssetTiles(page: Page, label: string): Promise<number> {
+  return page.evaluate((raw) => {
+    const re = new RegExp(raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+    const layer = document.querySelector(".cdk-overlay-pane");
+    if (!layer) return 0;
+    return [...layer.querySelectorAll(".asset-title")].filter((t) =>
+      re.test((t.textContent || "").trim())
+    ).length;
+  }, label);
+}
+
+// Attach one asset by its visible label. Live-verified interaction: Flow's
+// picker lists assets as tiles and exposes a single "Add to prompt" control for
+// the *selected* asset, so the flow is select-tile → Add to prompt.
+async function attachAssetByLabel(page: Page, label: string, tabs: Array<RegExp | null>): Promise<boolean> {
+  for (const tab of tabs) {
+    if (tab) {
+      await pickIngredientTab(page, tab);
+      await page.waitForTimeout(600);
+    }
+    // 1. Select the matching tile (clicking the tile names the detail pane).
+    const selected = await page.evaluate(
+      ({ source }) => {
+        const re = new RegExp(source, "i");
+        const layer = document.querySelector(".cdk-overlay-pane");
+        if (!layer) return false;
+        const visible = (el: Element) => {
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        };
+        const titles = [...layer.querySelectorAll(".asset-title")].filter(
+          (t) => visible(t) && re.test((t.textContent || "").trim())
+        );
+        if (titles.length === 0) return false;
+        const title = titles[titles.length - 1];
+        // The tile is the container holding exactly this title and a control.
+        let tile: Element | null = title;
+        for (let depth = 0; depth < 8 && tile?.parentElement; depth += 1) {
+          tile = tile.parentElement;
+          const buttons = [...(tile as Element).querySelectorAll("button")].filter(visible);
+          if ((tile as Element).querySelectorAll(".asset-title").length === 1 && buttons.length > 0) {
+            (buttons.find((b) => re.test(b.textContent || "")) ?? buttons[buttons.length - 1]).setAttribute("data-gflow-pick", "1");
+            return true;
+          }
+        }
+        const fallback = title.closest(".asset-item-container, [role=option], [data-tile-id]") ?? title.parentElement;
+        if (!fallback) return false;
+        fallback.setAttribute("data-gflow-pick", "1");
+        return true;
+      },
+      { source: label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") }
+    );
+    if (!selected) continue;
+    await clickMarkedHelper(page);
+    await page.waitForTimeout(600);
+
+    // 2. Activate the picker's "Add to prompt" control for the selection.
+    const addable = await page.evaluate(() => {
+      const layer = document.querySelector(".cdk-overlay-pane");
+      if (!layer) return false;
+      const button = [...layer.querySelectorAll("button")].find((b) => {
+        const r = b.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && /add to prompt/i.test(b.textContent || "");
+      });
+      if (!button) return false;
+      button.setAttribute("data-gflow-pick", "1");
+      return true;
+    });
+    if (!addable) return true; // layouts that attach on selection alone
+    await clickMarkedHelper(page);
+    await page.waitForTimeout(700);
+    return true;
+  }
+  return false;
+}
+
+// Upload a local file through the picker and attach the asset it creates.
+// Flow titles uploaded assets by filename and finishes small images in seconds
+// (observed ~5s for a JPEG), but the wait is generous because some uploads land
+// much later — and a file Flow silently ignores (video uploads, observed live)
+// must surface as the "did not appear" failure rather than a silent no-op.
+async function uploadAndAttachLocalFile(page: Page, filePath: string, timeoutMs: number = CHAT_UPLOAD_TIMEOUT_MS): Promise<void> {
+  const fileName = basename(filePath);
+  // A file already in the project need not be uploaded again — Flow would just
+  // add a duplicate asset, and repeated runs would pile them up.
+  if ((await countAssetTiles(page, fileName)) > 0) {
+    const attached = await attachAssetByLabel(page, fileName, [null, /Uploads$/, /Images$/, /All$/]);
+    if (!attached) throw new UiContractError(`Could not attach the project asset "${fileName}" in the Flow ingredient picker.`);
+    return;
+  }
+
+  const upload = page.getByRole("button", { name: /upload media/i }).first();
+  if ((await upload.count()) === 0) {
+    throw new UiContractError("The Flow ingredient picker does not offer an upload control.");
+  }
+  const [chooser] = await Promise.all([
+    page.waitForEvent("filechooser", { timeout: 20000 }),
+    upload.click({ timeout: 8000 }).catch(() => undefined)
+  ]);
+  await chooser.setFiles(filePath);
+
+  const appeared = await page
+    .waitForFunction(
+      (name) => {
+        const layer = document.querySelector(".cdk-overlay-pane");
+        if (!layer) return false;
+        return [...layer.querySelectorAll(".asset-title")].some((t) =>
+          (t.textContent || "").trim().toLowerCase().includes(name.toLowerCase())
+        );
+      },
+      fileName,
+      { timeout: timeoutMs }
+    )
+    .then(() => true)
+    .catch(() => false);
+  if (!appeared) {
+    throw new UiContractError(
+      `Flow did not accept the uploaded file "${fileName}" — no matching asset appeared in the ingredient picker. ` +
+      `Flow currently ignores uploaded video files; project videos can be attached by name.`
+    );
+  }
+  const attached = await attachAssetByLabel(page, fileName, [null, /Uploads$/, /All$/]);
+  if (!attached) throw new UiContractError(`Could not attach the uploaded file "${fileName}" in the Flow ingredient picker.`);
+}
+
+// Open the picker if it is not already open (Flow closes it after each attach,
+// and an open picker toggles shut on another "+" click).
+async function ensurePickerOpen(page: Page): Promise<void> {
+  const open = await page.evaluate(() => {
+    const layer = document.querySelector(".cdk-overlay-pane");
+    if (!layer) return false;
+    const tab = layer.querySelector("[role=tab]");
+    if (!tab) return false;
+    const r = tab.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  });
+  if (!open) await openIngredientPicker(page);
+}
+
+// Attach every requested photo, video, and project media item to the chat turn.
+// Each item is attached independently — Flow closes the picker after an attach,
+// so the picker is reopened per item; a failure names the item and leaves the
+// picker closed so a later run is not blocked by a hanging overlay.
+// `uploadTimeoutMs` bounds how long an uploaded file may take to surface as an
+// asset (default CHAT_UPLOAD_TIMEOUT_MS); tests shorten it.
+export async function attachChatMedia(
+  page: Page,
+  media: { photos?: string[]; videos?: string[]; fromProject?: string[] },
+  options: { uploadTimeoutMs?: number } = {}
+): Promise<void> {
+  const photos = media.photos ?? [];
+  const videos = media.videos ?? [];
+  const fromProject = media.fromProject ?? [];
+  if (photos.length + videos.length + fromProject.length === 0) return;
+
+  try {
+    for (const file of [...photos, ...videos]) {
+      await ensurePickerOpen(page);
+      await uploadAndAttachLocalFile(page, file, options.uploadTimeoutMs);
+      await closeIngredientPicker(page);
+    }
+    for (const name of fromProject) {
+      await ensurePickerOpen(page);
+      const attached = await attachAssetByLabel(page, name, [null, /All$/, /Images$/, /Videos$/]);
+      await closeIngredientPicker(page);
+      if (!attached) {
+        throw new UiContractError(
+          `Could not find "${name}" in the Flow ingredient picker. Check the name with \`gflow media list\`.`
+        );
+      }
+    }
+  } catch (error) {
+    await closeIngredientPicker(page).catch(() => undefined);
+    throw error;
+  }
+}
+
+// Verify that `expected` media items are attached to the chat turn. The chips
+// carry no filename text, so this is a count check — but a count is enough:
+// each attach above either produced a chip or the run already failed.
+export async function verifyChatAttachments(page: Page, expected: number): Promise<void> {
+  if (expected <= 0) return;
+  const chips = await page.evaluate(
+    () => document.querySelectorAll("flow-ingredient-bar flow-ingredient-chip").length
+  );
+  if (chips < expected) {
+    throw new UiContractError(
+      `Expected ${expected} media attachment(s) in the Flow chat, but only ${chips} are attached. ` +
+      `The attachment did not take effect, so no generation was started.`
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
