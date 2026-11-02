@@ -15,7 +15,7 @@ export interface ArtifactPlan {
 
 export interface ArtifactMetadata {
   jobId: string;
-  type: "image" | "video";
+  type: "image" | "video" | "music";
   prompt: string;
   project?: string;
   model?: string;
@@ -24,6 +24,12 @@ export interface ArtifactMetadata {
   requestedOutputs: number;
   quality?: "original" | "2k" | "4k";
   characters?: string[];
+  /** Style/sound description requested for a music job (as sent to the Producer chat). */
+  style?: string;
+  /** Lyrics requested for a music job (as sent to the Producer chat). */
+  lyrics?: string;
+  /** Whether an instrumental (no vocals) song was requested. */
+  instrumental?: boolean;
   /** Media attached to the chat turn for this run, as requested (paths and names). */
   attachments?: {
     photos: string[];
@@ -31,7 +37,7 @@ export interface ArtifactMetadata {
     fromProject: string[];
   };
   downloadedAt: string;
-  source: "google-flow-browser";
+  source: "google-flow-browser" | "google-flow-music-browser";
   flowUrl: string;
   status: "downloaded";
 }

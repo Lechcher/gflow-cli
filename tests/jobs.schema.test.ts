@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseBatchYaml, parseImageJob, parseVideoJob, parseCharacter, parseTool } from "../src/jobs/schema.js";
 import { parseAgentSettings, parseAgentInstruction, parseAgentRun } from "../src/jobs/schema.js";
 import { parseExtendScene } from "../src/jobs/schema.js";
+import { parseMusicJob } from "../src/jobs/schema.js";
 
 describe("job schemas", () => {
   it("parses an image job with defaults", () => {
@@ -142,5 +143,75 @@ describe("agent schemas", () => {
   });
   it("agent run requires id + prompt", () => {
     expect(parseAgentRun({ id: "a1", prompt: "make a teaser" }).out).toBe("./gflow-output");
+  });
+});
+
+describe("music schema", () => {
+  it("parses a music job with defaults", () => {
+    const job = parseMusicJob({
+      id: "lofi",
+      type: "music",
+      prompt: "a short rainy lo-fi hip hop beat for studying"
+    });
+
+    expect(job).toMatchObject({
+      id: "lofi",
+      type: "music",
+      prompt: "a short rainy lo-fi hip hop beat for studying",
+      instrumental: false,
+      out: "./gflow-output"
+    });
+    expect(job.style).toBeUndefined();
+    expect(job.lyrics).toBeUndefined();
+    expect(job.duration).toBeUndefined();
+  });
+
+  it("accepts the verified structured fields", () => {
+    const job = parseMusicJob({
+      id: "lofi",
+      type: "music",
+      prompt: "a rainy lo-fi beat",
+      style: "lo-fi hip hop, mellow piano, vinyl crackle",
+      lyrics: "rain keeps me company",
+      instrumental: true,
+      duration: 30
+    });
+
+    expect(job.style).toBe("lo-fi hip hop, mellow piano, vinyl crackle");
+    expect(job.lyrics).toBe("rain keeps me company");
+    expect(job.instrumental).toBe(true);
+    expect(job.duration).toBe(30);
+  });
+
+  it("accepts a lyrics file that exists", () => {
+    const job = parseMusicJob({
+      id: "lofi",
+      type: "music",
+      prompt: "a rainy lo-fi beat",
+      lyricsFile: "package.json"
+    });
+    expect(job.lyricsFile).toBe("package.json");
+  });
+
+  it("rejects a non-integer duration", () => {
+    expect(() =>
+      parseMusicJob({ id: "lofi", type: "music", prompt: "x", duration: "thirty" })
+    ).toThrow();
+  });
+
+  it("rejects a missing lyrics file", () => {
+    expect(() =>
+      parseMusicJob({ id: "lofi", type: "music", prompt: "x", lyricsFile: "./no-such-lyrics.txt" })
+    ).toThrow(/lyrics file not found/);
+  });
+
+  it("rejects lyrics and lyrics-file together", () => {
+    expect(() =>
+      parseMusicJob({ id: "lofi", type: "music", prompt: "x", lyrics: "text", lyricsFile: "package.json" })
+    ).toThrow(/mutually exclusive/);
+  });
+
+  it("rejects an empty prompt", () => {
+    expect(() => parseMusicJob({ id: "lofi", type: "music", prompt: "" })).toThrow();
   });
 });

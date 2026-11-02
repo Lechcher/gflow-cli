@@ -1,4 +1,5 @@
 import type { GFlowJob } from "../jobs/schema.js";
+import type { MusicDownloadFormat } from "./locators.js";
 
 export interface FlowArtifact {
   path: string;
@@ -158,4 +159,33 @@ export interface AgentAutomation {
   addInstruction(input: AgentInstructionInput): Promise<void>;
   listInstructions(project?: string): Promise<AgentInstructionSummary[]>;
   clearInstructions(project?: string): Promise<void>;
+}
+
+// Flow Music studio (flowmusic.app): a song request goes to the Producer chat and the
+// finished song is downloaded through its options menu. Duration has no live control —
+// it is accepted and recorded in metadata only (video-command pattern).
+export interface RunMusicInput {
+  id: string;
+  prompt: string;
+  style?: string;
+  lyrics?: string;
+  lyricsFile?: string;
+  instrumental?: boolean;
+  duration?: number;
+  outDir: string;
+  timeout?: number;
+  /** Download format offered by Flow Music's song menu; defaults to mp3. */
+  format?: MusicDownloadFormat;
+}
+
+export interface MusicSongResult {
+  jobId: string;
+  artifacts: { path: string; metadataPath: string }[];
+  flowUrl: string;
+}
+
+export interface MusicAutomation {
+  runSong(input: RunMusicInput): Promise<MusicSongResult>;
+  /** Verify the Flow Music session is signed in and the studio is reachable. */
+  assertReady(): Promise<void>;
 }

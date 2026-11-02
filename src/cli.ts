@@ -6,13 +6,15 @@ import { Command, CommanderError, InvalidArgumentError } from "commander";
 import { BROWSER_CHANNELS, DEFAULT_BROWSER_CHANNEL, launchLoginChrome, openBrowserSession, type BrowserChannel } from "./browser/session.js";
 import { exitCodeForError, messageForError } from "./errors.js";
 import { FlowPage, FLOW_URL } from "./flow/page.js";
-import type { AgentAutomation, CharacterAutomation, EditAutomation, FlowAutomation, SceneAutomation, ToolAutomation } from "./flow/types.js";
+import type { AgentAutomation, CharacterAutomation, EditAutomation, FlowAutomation, MusicAutomation, SceneAutomation, ToolAutomation } from "./flow/types.js";
 import { AgentPage } from "./flow/agent.js";
 import { CharacterPage } from "./flow/characters.js";
 import { EditPage } from "./flow/edit.js";
+import { MUSIC_DOWNLOAD_FORMATS } from "./flow/locators.js";
+import { MusicPage } from "./flow/music.js";
 import { ScenePage } from "./flow/scene.js";
 import { ToolPage } from "./flow/tools.js";
-import { parseAgentInstruction, parseAgentRun, parseAgentSettings, parseBatchYaml, parseCharacter, parseEditMedia, parseExtendScene, parseImageJob, parseTool, parseVideoJob } from "./jobs/schema.js";
+import { parseAgentInstruction, parseAgentRun, parseAgentSettings, parseBatchYaml, parseCharacter, parseEditMedia, parseExtendScene, parseImageJob, parseMusicJob, parseTool, parseVideoJob } from "./jobs/schema.js";
 import { compositeAutomation, runJobs } from "./jobs/runner.js";
 import { resolveOutputDir } from "./config/paths.js";
 
@@ -35,6 +37,8 @@ export interface CreateProgramOptions {
   editAutomation?: EditAutomation;
   /** Scenebuilder surface (`ScenePage`) behind `gflow extend` and `gflow scene`. */
   sceneAutomation?: SceneAutomation;
+  /** Google Flow Music surface (`MusicPage`) behind `gflow music`. */
+  musicAutomation?: MusicAutomation;
 }
 
 function collectOption(value: string, previous: string[]): string[] {
@@ -168,10 +172,38 @@ async function realEditAutomation(profile: string, headed: boolean, browser: Bro
   return { automation: new EditPage(session.page), close: () => session.close() };
 }
 
+// Flow Music is a separate signed-in surface, so it runs in its own tab of the same
+// session. runSong/open navigate and clear the first-run dialog themselves.
+async function realMusicAutomation(profile: string, headed: boolean, browser: BrowserChannel): Promise<{ automation: MusicAutomation; close(): Promise<void> }> {
+  const session = await openBrowserSession({ profile, headed, browser });
+  const music = new MusicPage(await session.context.newPage());
+  return { automation: music, close: () => session.close() };
+}
+
+// doctor checks both signed-in surfaces in one session: the Flow tab and a fresh
+// Flow Music tab.
+async function realDoctorSurfaces(profile: string, headed: boolean, browser: BrowserChannel): Promise<{
+  flow: FlowAutomation | undefined;
+  music: MusicAutomation | undefined;
+  close(): Promise<void>;
+}> {
+  const session = await openBrowserSession({ profile, headed, browser });
+  const flow = new FlowPage(session.page);
+  const music = new MusicPage(await session.context.newPage());
+  try {
+    await flow.open();
+    await music.open();
+  } catch (error) {
+    await session.close();
+    throw error;
+  }
+  return { flow, music, close: () => session.close() };
+}
+
 /**
  * Build the `gflow` commander program with every top-level command wired up:
  * `auth`, `doctor`, `image`, `video`, `agent`, `batch`, `character`, `edit`,
- * `extend`, `scene`, `tool`, and `media`. Each command drives the Google Flow
+ * `extend`, `scene`, `tool`, `music`, and `media`. Each command drives the Google Flow
  * browser automation unless an injected fake replaces its surface.
  *
  * @param options optional automation fakes — see {@link CreateProgramOptions}.
@@ -224,18 +256,27 @@ export function createProgram(options: CreateProgramOptions = {}): Command {
 
   program
     .command("doctor")
-    .description("Check that the Flow browser session is signed in and ready.")
+    .description("Check that both browser surfaces (Google Flow and Flow Music) are signed in and ready.")
     .option("--profile <name>", "browser profile name", "default")
     .option("--browser <name>", "browser channel for Flow automation: chrome or chromium", parseBrowserOption, DEFAULT_BROWSER_CHANNEL)
     .option("--headed", "show browser", true)
     .option("--no-headed", "run browser headless")
     .action(async (command) => {
-      const owned = await realAutomation(command.profile, command.headed, command.browser);
+      // Injected surfaces keep doctor testable: an injected fake's assertReady decides
+      // readiness, and the real Chrome path checks both surfaces in one session.
+      const owned = options.automation || options.musicAutomation
+        ? { flow: options.automation, music: options.musicAutomation, close: async () => undefined }
+        : await realDoctorSurfaces(command.profile, command.headed, command.browser);
       try {
-        if (owned.automation instanceof FlowPage) {
-          await owned.automation.assertReady();
+        if (owned.flow instanceof FlowPage) {
+          await owned.flow.assertReady();
+          console.log("gflow doctor: Google Flow is signed in and ready.");
         }
-        console.log("gflow doctor: Flow browser session looks ready.");
+        if (owned.music) {
+          await owned.music.assertReady();
+          console.log("gflow doctor: Google Flow Music is signed in and ready.");
+        }
+        console.log("gflow doctor: browser session looks ready.");
       } finally {
         await owned.close();
       }
@@ -700,6 +741,59 @@ export function createProgram(options: CreateProgramOptions = {}): Command {
       await owned.close();
     }
   });
+
+  program
+    .command("music")
+    .description("Generate a song from a prompt with Google Flow Music.")
+    .requiredOption("--id <id>", "job id")
+    .requiredOption("--prompt <text>", "song description for the Producer chat")
+    .option("--style <text>", "style/sound description (Flow Music's Sound panel)")
+    .option("--lyrics <text>", "lyrics text to bring to the song")
+    .option("--lyrics-file <path>", "read the lyrics from a file instead")
+    .option("--instrumental", "request an instrumental (no vocals) song")
+    .option("--duration <seconds>", "requested length in seconds; recorded in metadata — Flow Music sets the song's length", parseIntegerOption)
+    .option("--format <format>", "download format: m4a, mp3, or wav", (v) => {
+      if (!MUSIC_DOWNLOAD_FORMATS.includes(v as (typeof MUSIC_DOWNLOAD_FORMATS)[number])) {
+        throw new InvalidArgumentError(`must be one of: ${MUSIC_DOWNLOAD_FORMATS.join(", ")}`);
+      }
+      return v;
+    }, "mp3")
+    .option("--timeout <seconds>", "generation timeout in seconds", parseIntegerOption)
+    .option("--out <path>", "output directory", "./gflow-output")
+    .option("--profile <name>", "browser profile name", "default")
+    .option("--browser <name>", "browser channel for Flow automation: chrome or chromium", parseBrowserOption, DEFAULT_BROWSER_CHANNEL)
+    .option("--headed", "show browser", true)
+    .option("--no-headed", "run browser headless")
+    .action(async (command) => {
+      // Parse before opening the browser: a bad duration or missing lyrics file fails here.
+      const job = parseMusicJob({
+        id: command.id,
+        type: "music",
+        prompt: command.prompt,
+        style: command.style,
+        lyrics: command.lyrics,
+        lyricsFile: command.lyricsFile ? resolve(process.cwd(), command.lyricsFile) : undefined,
+        instrumental: command.instrumental ?? false,
+        duration: command.duration,
+        timeout: command.timeout,
+        out: command.out
+      });
+      const owned = options.musicAutomation
+        ? { automation: options.musicAutomation, close: async () => undefined }
+        : await realMusicAutomation(command.profile, command.headed, command.browser);
+      try {
+        const result = await owned.automation.runSong({
+          ...job,
+          outDir: resolveOutputDir(job.out),
+          format: command.format
+        });
+        for (const artifact of result.artifacts) {
+          console.log(`saved ${artifact.path}`);
+        }
+      } finally {
+        await owned.close();
+      }
+    });
 
   program.configureOutput({
     writeErr: (text) => process.stderr.write(text)

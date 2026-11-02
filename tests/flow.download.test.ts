@@ -19,4 +19,15 @@ describe("download helpers", () => {
     expect(extensionFor("image", "image/jpeg")).toBe(".jpg");
     expect(extensionFor("image", undefined)).toBe(".png");
   });
+
+  it("derives audio extensions from content type", () => {
+    expect(extensionFor("audio", "audio/mpeg")).toBe(".mp3");
+    expect(extensionFor("audio", "audio/mp3")).toBe(".mp3");
+    expect(extensionFor("audio", "audio/wav")).toBe(".wav");
+    expect(extensionFor("audio", "audio/flac")).toBe(".flac");
+    expect(extensionFor("audio", "audio/ogg")).toBe(".ogg");
+    expect(extensionFor("audio", "audio/aac")).toBe(".aac");
+    expect(extensionFor("audio", "audio/mp4")).toBe(".m4a");
+    expect(extensionFor("audio", undefined)).toBe(".mp3");
+  });
 });

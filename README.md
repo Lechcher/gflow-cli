@@ -4,7 +4,7 @@
 
 # gflow-cli
 
-**Generate images and videos with [Google Flow](https://flow.google.com) from your terminal.**
+**Generate images, videos, and songs with [Google Flow](https://flow.google.com) and [Flow Music](https://www.flowmusic.app/) from your terminal.**
 
 `gflow` drives Flow inside your own logged-in Google Chrome, so it works as a normal, human
 browser session — no private APIs, no login bypass.
@@ -26,6 +26,8 @@ browser session — no private APIs, no login bypass.
 
 - 🖼️ **Image generation** — Nano Banana 2 / 2.1, Nano Banana Pro
 - 🎬 **Video generation** — Omni 1.1 Flash, Veo 3.1 (Lite / Fast / Quality)
+- 🎵 **Music generation** — full songs with vocals (or instrumental) from Google Flow
+  Music's Producer chat, downloaded as M4A / MP3 / WAV
 - 🎛️ **Per-project defaults** — model, aspect ratio, output count, applied to Flow's Agent
   settings before submit and verified in place
 - 📦 **Batch pipelines** — run many jobs from one YAML file
@@ -149,19 +151,27 @@ Every command that opens Flow accepts these session options:
 
 ### `gflow auth login`
 
-Opens a **plain** Chrome (no remote-debugging flags) on the Flow page with an isolated profile
-(`.gflow/profiles/<name>`). Complete the Google login here — signing in must happen in an
-ordinary window, or Google rejects it as "not secure". The next command takes the session over
-for automation.
+Opens a **plain** Chrome (no remote-debugging flags) with an isolated profile
+(`.gflow/profiles/<name>`) on **both** surfaces: Google Flow and Google Flow Music
+(flowmusic.app). Complete the Google login here — signing in must happen in an ordinary
+window, or Google rejects it as "not secure". The next command takes the session over for
+automation.
 
 ```bash
 gflow auth login
 gflow auth login --profile work
 ```
 
+> **Flow Music needs its own one-time login.** Flow Music is a separate signed-in surface:
+> signing in to Flow does not sign it in. The login window opens it as a second tab — click
+> **Log in → "Get free studio access" → Continue with Google** once there (Google shows its
+> account chooser and a consent screen; with your Flow session already signed in, no password
+> is needed). After that, both surfaces share the profile session.
+
 ### `gflow doctor`
 
-Attaches to your Flow window (or launches one) and confirms you're signed in and ready.
+Attaches to your browser session (or launches one) and confirms **both** surfaces — Google
+Flow and Google Flow Music — are signed in and ready, reporting each one.
 
 ```bash
 gflow doctor
@@ -289,6 +299,66 @@ List all images and videos in the project with their unique ids (the ids you pas
 gflow media list
 gflow media list --project my-film
 ```
+
+### `gflow music`
+
+Generate a song with [Google Flow Music](https://www.flowmusic.app/) — the chat-driven
+Producer writes, produces, and sings it. The structured fields map onto Flow Music's own
+controls (the Sound panel, the Lyrics panel, instrumental mode); the run waits for the
+**completed song** before downloading it.
+
+| Option                  | Default          | Description                                                                 |
+| ----------------------- | ---------------- | --------------------------------------------------------------------------- |
+| `--id <id>`             | _required_       | Job id (used in output filenames)                                           |
+| `--prompt <text>`       | _required_       | Song description for the Producer chat                                      |
+| `--style <text>`        | —                | Style/sound description (Flow Music's Sound panel)                          |
+| `--lyrics <text>`       | —                | Lyrics to bring to the song (mutually exclusive with `--lyrics-file`)       |
+| `--lyrics-file <path>`  | —                | Read the lyrics from a file instead                                         |
+| `--instrumental`        | —                | Request an instrumental (no vocals) song                                    |
+| `--duration <seconds>`  | —                | Requested length; **recorded in the output metadata only** — Flow Music sets a song's length itself |
+| `--format <format>`     | `mp3`            | Download format: `m4a`, `mp3`, or `wav`                                     |
+| `--timeout <seconds>`   | `900`            | Generation timeout (a full song usually completes in ~1 minute)             |
+| `--out <path>`          | `./gflow-output` | Output directory                                                            |
+
+```bash
+gflow music --id lofi --prompt "a rainy lo-fi hip hop beat for studying"
+
+# with the structured fields
+gflow music --id anthem --prompt "a stadium rock anthem about Monday mornings" \
+  --style "anthemic rock, stadium reverb, 120 bpm" \
+  --lyrics "the alarm clock sings our song" \
+  --format wav --out ./out
+
+# instrumental, no vocals
+gflow music --id beds --prompt "warm ambient beds for a documentary" --instrumental
+```
+
+Each requested field is applied to Flow Music's own control and **verified before the
+prompt is submitted** — if the studio can't apply it, the run fails instead of producing a
+song without it. `gflow doctor` covers the Flow Music session too (see `gflow auth login`
+for its one-time login).
+
+The audio file lands in `--out` as `<job-id>-001.<format>` with a sibling metadata file:
+
+```json
+{
+  "jobId": "anthem",
+  "type": "music",
+  "prompt": "a stadium rock anthem about Monday mornings",
+  "style": "anthemic rock, stadium reverb, 120 bpm",
+  "lyrics": "the alarm clock sings our song",
+  "instrumental": false,
+  "duration": 30,
+  "requestedOutputs": 1,
+  "downloadedAt": "2026-11-03T04:20:00.000Z",
+  "source": "google-flow-music-browser",
+  "flowUrl": "https://www.flowmusic.app/session?t=true",
+  "status": "downloaded"
+}
+```
+
+(`duration` is the requested length — recorded, not enforced, because Flow Music sets a
+song's length itself.)
 
 ### `gflow character`
 

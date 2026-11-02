@@ -16,7 +16,16 @@ export function qualityMenuPattern(quality: DownloadQuality): RegExp {
   return /original/i;
 }
 
-export function extensionFor(type: "image" | "video", contentType: string | undefined): string {
+export function extensionFor(type: "image" | "video" | "audio", contentType: string | undefined): string {
+  if (type === "audio") {
+    if (contentType?.includes("wav")) return ".wav";
+    if (contentType?.includes("flac")) return ".flac";
+    if (contentType?.includes("ogg")) return ".ogg";
+    if (contentType?.includes("aac")) return ".aac";
+    // audio/mp4 and audio/x-m4a are the common MP4-container audio types.
+    if (contentType?.includes("m4a") || contentType?.includes("mp4")) return ".m4a";
+    return ".mp3";
+  }
   if (contentType?.includes("jpeg")) return ".jpg";
   if (contentType?.includes("png")) return ".png";
   if (contentType?.includes("webp")) return ".webp";
@@ -28,7 +37,7 @@ export interface DownloadInput {
   page: Page;
   context: BrowserContext;
   src: string;
-  type: "image" | "video";
+  type: "image" | "video" | "audio";
   quality: DownloadQuality;
   outDir: string;
   basename: string; // e.g. "job1-001" (no extension)
@@ -132,8 +141,20 @@ async function downloadViaMenu(input: DownloadInput): Promise<DownloadOutput | u
   return saveDownload(input, download);
 }
 
+// Capture a download the page starts itself (e.g. Flow Music's song menu) and save it
+// under the artifact naming. `trigger` performs the click that starts the download.
+export async function captureDownloadEvent(input: DownloadInput, trigger: () => Promise<unknown>): Promise<DownloadOutput> {
+  const [download] = await Promise.all([
+    input.page.waitForEvent("download", { timeout: 180000 }),
+    trigger()
+  ]);
+  return saveDownload(input, download);
+}
+
 async function saveDownload(input: DownloadInput, download: Download): Promise<DownloadOutput> {
-  const ext = extname(download.suggestedFilename()) || (input.type === "video" ? ".mp4" : ".png");
+  const ext =
+    extname(download.suggestedFilename()) ||
+    (input.type === "video" ? ".mp4" : input.type === "audio" ? ".mp3" : ".png");
   const assetPath = join(input.outDir, `${input.basename}${ext}`);
   await download.saveAs(assetPath);
   return { assetPath };

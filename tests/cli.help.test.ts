@@ -12,7 +12,7 @@ function sub(program: Command, name: string): Command {
 describe("gflow help", () => {
   it("lists every top-level command with a description", () => {
     const help = createProgram().helpInformation();
-    for (const name of ["auth", "doctor", "image", "video", "batch", "character", "tool", "agent"]) {
+    for (const name of ["auth", "doctor", "image", "video", "batch", "character", "tool", "agent", "music"]) {
       expect(help).toContain(name);
     }
     // Each command line carries a description (not a bare `name [options]`).
@@ -20,6 +20,7 @@ describe("gflow help", () => {
     expect(help).toMatch(/image[\s\S]*?Generate an image/i);
     expect(help).toMatch(/video[\s\S]*?Generate a video/i);
     expect(help).toMatch(/batch[\s\S]*?YAML pipeline/i);
+    expect(help).toMatch(/music[\s\S]*?Generate a song/i);
   });
 
   it("exposes character/tool/agent subcommands in their help", () => {
@@ -36,6 +37,11 @@ describe("gflow help", () => {
     const agentHelp = sub(program, "agent").helpInformation();
     expect(agentHelp).toContain("settings");
     expect(agentHelp).toContain("instruction");
+
+    const musicHelp = sub(program, "music").helpInformation();
+    for (const flag of ["--prompt", "--style", "--lyrics", "--lyrics-file", "--instrumental", "--duration", "--format", "--timeout", "--out"]) {
+      expect(musicHelp).toContain(flag);
+    }
 
     const instructionHelp = sub(sub(program, "agent"), "instruction").helpInformation();
     for (const name of ["add", "list", "clear"]) expect(instructionHelp).toContain(name);

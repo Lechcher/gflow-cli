@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Flow Music Fixture</title>
+  </head>
+  <body>
+    <!-- Mirrors the live-verified Flow Music studio (flowmusic.app), recorded Nov 2-3
+         2026 (see openspec/changes/add-flow-music-generation/design.md): the Producer
+         composer is a textarea[aria-label="Chat message"], the chat-row submit is the
+         "Send message" icon button (disabled until the prompt registers), the Sound and
+         Lyrics sections are expanded by default with their textareas present (zero
+         width live — focusable but not Playwright-actionable), instrumental mode is a
+         DOM-level toggle carrying data-state, and a finished song appears as an
+         a[href^="/song/"] session link with a per-song "More options" menu whose
+         Download action opens an M4A/MP3/WAV format submenu.
+         Failure modes are query-driven, like the Flow fixture's ?silent-upload=video. -->
+    <main data-testid="flow-music-ready">
+      <header id="top-nav">
+        <button id="login-button" hidden>Log in</button>
+        <button id="signup-button" hidden>Sign up</button>
+        <a id="profile-link" href="/profile">Profile</a>
+      </header>
+
+      <!-- Consent / manual-action surfaces (real Flow Music shows these first-run). -->
+      <div id="consent" hidden>Grant access to your Google One subscription to use your benefits.</div>
+      <div id="privacy" role="dialog" hidden>
+        <select aria-label="Country"><option>US</option></select>
+        <button id="agree">Agree</button>
+      </div>
+
+      <h2>What do you want to create?</h2>
+      <p id="greeting">Your Producer is here</p>
+
+      <!-- The structured-field panels: expanded by default, zero-width textareas like
+           the live studio; the section button collapses them (aria-label stays
+           "Collapse <section> section" — that is the fallback opener's selector). -->
+      <div id="lyrics-panel">
+        <textarea aria-label="Lyrics" placeholder="Lyrics" style="width: 0;"></textarea>
+      </div>
+      <div id="sound-panel">
+        <textarea aria-label="Sound description" placeholder="Sound description" style="width: 0;"></textarea>
+      </div>
+
+      <!-- Composer row (live order: + / settings / voice, then toggles + submit). -->
+      <div id="composer-row">
+        <button id="add-audio" aria-label="Add audio or image">add</button>
+        <button id="chat-settings" aria-label="Chat settings">settings</button>
+        <button id="voice-mode" aria-label="Voice mode">waveform</button>
+        <button id="lyrics-toggle" aria-label="Collapse Lyrics section" aria-expanded="true">Lyrics</button>
+        <button id="instrumental-toggle" aria-label="Toggle instrumental mode" aria-pressed="false" data-state="unchecked">Toggle instrumental mode</button>
+        <button id="sound-toggle" aria-label="Collapse Sound section" aria-expanded="true">Sound</button>
+        <button id="sound-advanced" aria-label="Toggle advanced sound mode">advanced</button>
+        <textarea id="composer" aria-label="Chat message" placeholder="Describe your song..."></textarea>
+        <button id="send" aria-label="Send message" disabled>arrow_upward</button>
+      </div>
+
+      <div id="producing" hidden>Producing your song…</div>
+      <div id="blocked" hidden>I can't help with that request — content policy.</div>
+
+      <!-- A finished song: session link + per-song options + player. -->
+      <section id="song-session" hidden>
+        <a id="song-link" href="/song/1da86e55-0e9a-4fc1-83d5-e38d179050ee">Rainy Study Session</a>
+        <div id="player">
+          <button id="play" aria-label="Play Rainy Study Session">play</button>
+          <button id="like">Like Rainy Study Session</button>
+          <button id="more-options" aria-label="More options for Rainy Study Session">more</button>
+        </div>
+        <div id="song-menu" role="menu" hidden>
+          <button role="menuitem" data-action="remix">Remix</button>
+          <button role="menuitem" data-action="details">Details</button>
+          <button role="menuitem" id="menu-download" data-action="download">Download</button>
+          <button role="menuitem" data-action="share">Share...</button>
+          <button role="menuitem" data-action="add-to">Add to...</button>
+          <button role="menuitem" data-action="stems">Split stems</button>
+          <button role="menuitem" data-action="report">Report</button>
+        </div>
+        <div id="format-menu" role="menu" hidden>
+          <button role="menuitem" id="format-video">Download video</button>
+          <button role="menuitem" id="format-stems">Get stems</button>
+          <button role="menuitem" class="format-item" data-ext="m4a">M4A</button>
+          <button role="menuitem" class="format-item" data-ext="mp3">MP3</button>
+          <button role="menuitem" class="format-item" data-ext="wav">WAV</button>
+        </div>
+      </section>
+    </main>
+
+    <a id="gflow-audio-download" hidden></a>
+
+    <script>
+      (function () {
+        var q = new URLSearchParams(location.search);
+        var composer = document.getElementById("composer");
+        var send = document.getElementById("send");
+        var greeting = document.getElementById("greeting");
+
+        // Signed-out state: the header login controls are the readiness marker.
+        if (q.get("signed-out") === "1") {
+          document.getElementById("login-button").hidden = false;
+          document.getElementById("signup-button").hidden = false;
+          document.getElementById("profile-link").hidden = true;
+        }
+        if (q.get("consent") === "1") {
+          document.getElementById("consent").hidden = false;
+        }
+        if (q.get("privacy") === "1") {
+          document.getElementById("privacy").hidden = false;
+          document.getElementById("agree").addEventListener("click", function () {
+            document.getElementById("privacy").hidden = true;
+          });
+        }
+
+        // Sections start collapsed in ?collapsed=1 mode (exercises the toggle fallback).
+        var collapsed = q.get("collapsed") === "1";
+        if (collapsed) {
+          document.getElementById("lyrics-panel").hidden = true;
+          document.getElementById("sound-panel").hidden = true;
+          document.getElementById("lyrics-toggle").setAttribute("aria-expanded", "false");
+          document.getElementById("sound-toggle").setAttribute("aria-expanded", "false");
+        }
+
+        // Submit enables once the prompt registers (real Flow enables within ~4s).
+        composer.addEventListener("input", function () {
+          send.disabled = composer.value.trim().length === 0;
+        });
+
+        // Section toggles: reveal/collapse their panels.
+        function sectionToggle(buttonId, panelId) {
+          var btn = document.getElementById(buttonId);
+          if (!btn) return;
+          btn.addEventListener("click", function () {
+            var panel = document.getElementById(panelId);
+            panel.hidden = !panel.hidden;
+            btn.setAttribute("aria-expanded", panel.hidden ? "false" : "true");
+          });
+        }
+        sectionToggle("lyrics-toggle", "lyrics-panel");
+        sectionToggle("sound-toggle", "sound-panel");
+
+        // Instrumental mode: data-state (live) with aria-pressed kept in sync.
+        var instrumental = document.getElementById("instrumental-toggle");
+        if (instrumental) {
+          instrumental.addEventListener("click", function () {
+            var on = instrumental.getAttribute("aria-pressed") === "true";
+            instrumental.setAttribute("aria-pressed", on ? "false" : "true");
+            instrumental.setAttribute("data-state", on ? "unchecked" : "checked");
+          });
+        }
+
+        // ?no-lyrics-panel: the Lyrics field and its control do not exist at all.
+        if (q.get("no-lyrics-panel") === "1") {
+          document.getElementById("lyrics-panel").remove();
+          document.getElementById("lyrics-toggle").remove();
+        }
+
+        // Submit: the greeting is replaced while producing; a completed song then
+        // appears as the session link (or the failure mode fires).
+        send.addEventListener("click", function () {
+          greeting.hidden = true;
+          document.getElementById("blocked").hidden = true;
+          document.getElementById("producing").hidden = false;
+          if (q.get("blocked") === "1") {
+            document.getElementById("producing").hidden = true;
+            document.getElementById("blocked").hidden = false;
+            return;
+          }
+          setTimeout(function () {
+            if (q.get("never-completes") === "1") return; // producing forever
+            document.getElementById("producing").hidden = true;
+            document.getElementById("song-session").hidden = false;
+          }, 400);
+        });
+
+        // Song options menu -> Download -> format -> native download event.
+        document.getElementById("more-options").addEventListener("click", function () {
+          document.getElementById("song-menu").hidden = false;
+        });
+        document.getElementById("menu-download").addEventListener("click", function () {
+          document.getElementById("song-menu").hidden = true;
+          if (q.get("no-format") === "1") return;
+          document.getElementById("format-menu").hidden = false;
+        });
+        document.querySelectorAll(".format-item").forEach(function (item) {
+          item.addEventListener("click", function () {
+            var ext = item.getAttribute("data-ext");
+            // Real Flow Music serves a blob URL whose download attribute names the
+            // song ("<title>.<ext>"); emulate that so the download event carries a
+            // real suggestedFilename.
+            var bytes = new Uint8Array([0x49, 0x44, 0x33, ext === "wav" ? 0x57 : 0x4d]);
+            var blob = new Blob([bytes], { type: ext === "mp3" ? "audio/mpeg" : "audio/mp4" });
+            var anchor = document.getElementById("gflow-audio-download");
+            anchor.hidden = false;
+            anchor.href = URL.createObjectURL(blob);
+            anchor.setAttribute("download", "Rainy Study Session." + ext);
+            anchor.click();
+          });
+        });
+      })();
+    </script>
+  </body>
+</html>

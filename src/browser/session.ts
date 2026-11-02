@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { resolveProfileDir } from "../config/paths.js";
 import { FLOW_URL } from "../flow/page.js";
+import { FLOW_MUSIC_URL } from "../flow/locators.js";
 
 const execFileAsync = promisify(execFile);
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -302,7 +303,11 @@ export async function launchLoginChrome(profile: string): Promise<string> {
   // automation command knows this plain window has no debugging port.
   await rm(join(profileDir, "DevToolsActivePort"), { force: true });
 
-  const args = [`--user-data-dir=${profileDir}`, "--no-first-run", "--no-default-browser-check", FLOW_URL];
+  // Open both surfaces in the plain sign-in window: Flow Music (flowmusic.app) is a
+  // separate signed-in surface — the Google session alone does not sign it in, so the
+  // user completes its "Continue with Google" login here and every later command finds
+  // both surfaces ready.
+  const args = [`--user-data-dir=${profileDir}`, "--no-first-run", "--no-default-browser-check", FLOW_URL, FLOW_MUSIC_URL];
   const child = spawn(resolveChromeExecutable(), args, { detached: true, stdio: "ignore" });
   child.unref();
   return profileDir;

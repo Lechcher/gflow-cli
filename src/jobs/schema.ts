@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import YAML from "yaml";
 import { z } from "zod";
 
@@ -239,4 +240,48 @@ export const editMediaSchema = z.object({
 export type EditMediaSpec = z.infer<typeof editMediaSchema>;
 export function parseEditMedia(value: unknown): EditMediaSpec {
   return editMediaSchema.parse(value);
+}
+
+// Flow Music song jobs. The field set is fixed by the live-verified Flow Music UI
+// contract (see the change's design.md): lyrics, style, and instrumental are discrete
+// controls Flow Music exposes; duration has no control and follows the video pattern —
+// accepted here, recorded in metadata, not enforced.
+export const musicJobSchema = z
+  .object({
+    id: z.string().min(1).regex(/^[a-zA-Z0-9._-]+$/),
+    type: z.literal("music"),
+    prompt: z.string().min(1),
+    style: z.string().min(1).optional(),
+    lyrics: z.string().min(1).optional(),
+    lyricsFile: z.string().min(1).optional(),
+    instrumental: z.boolean().default(false),
+    duration: z.number().int().min(1).optional(),
+    timeout: z.number().int().min(1).optional(),
+    out: z.string().min(1).default("./gflow-output")
+  })
+  .superRefine((value, ctx) => {
+    if (value.lyrics && value.lyricsFile) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "--lyrics and --lyrics-file are mutually exclusive" });
+    }
+    if (value.lyricsFile && !existsSync(value.lyricsFile)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `lyrics file not found: ${value.lyricsFile}` });
+    }
+  });
+
+// Explicit job shape (mirrors musicJobSchema; tsc fails if they drift).
+export interface MusicJob {
+  id: string;
+  type: "music";
+  prompt: string;
+  style?: string;
+  lyrics?: string;
+  lyricsFile?: string;
+  instrumental: boolean;
+  duration?: number;
+  timeout?: number;
+  out: string;
+}
+
+export function parseMusicJob(value: unknown): MusicJob {
+  return musicJobSchema.parse(value);
 }

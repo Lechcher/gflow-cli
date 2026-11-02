@@ -45,6 +45,40 @@ describe("artifact output", () => {
     expect(metadata.jobId).toBe("concept-image");
     expect(metadata.status).toBe("downloaded");
   });
+
+  it("writes music metadata with the structured song request", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gflow-test-"));
+    const plan = createArtifactPlan({
+      outDir: root,
+      jobId: "lofi",
+      index: 1,
+      extension: ".mp3"
+    });
+
+    await writeArtifactMetadata(plan.metadataPath, {
+      jobId: "lofi",
+      type: "music",
+      prompt: "a short rainy lo-fi hip hop beat for studying",
+      style: "lo-fi hip hop, mellow piano, vinyl crackle",
+      lyrics: "rain keeps me company",
+      instrumental: false,
+      duration: 30,
+      requestedOutputs: 1,
+      downloadedAt: "2026-11-03T00:00:00.000Z",
+      source: "google-flow-music-browser",
+      flowUrl: "https://www.flowmusic.app/session?t=true",
+      status: "downloaded"
+    });
+
+    const metadata = JSON.parse(await readFile(plan.metadataPath, "utf8"));
+    expect(metadata.plan ?? plan.assetPath).toMatch(/\.mp3$/);
+    expect(metadata.type).toBe("music");
+    expect(metadata.source).toBe("google-flow-music-browser");
+    expect(metadata.style).toBe("lo-fi hip hop, mellow piano, vinyl crackle");
+    expect(metadata.lyrics).toBe("rain keeps me company");
+    expect(metadata.instrumental).toBe(false);
+    expect(metadata.duration).toBe(30);
+  });
 });
 
 describe("artifactBasename", () => {

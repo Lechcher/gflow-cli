@@ -1,5 +1,18 @@
 import type { Page } from "playwright";
 
+// The verified UI contract for Google Flow Music (flowmusic.app), recorded against the
+// live signed-in profile (see the add-flow-music-generation change's design.md). The
+// studio is a Next.js app with a chat-driven Producer composer: the prompt box is a
+// plain textarea, the submit is the chat row's "Send message" icon button, a finished
+// song appears as a link to /song/<id> in the session, and the download lives in the
+// song's "More options" menu behind a format picker (M4A/MP3/WAV).
+export const FLOW_MUSIC_URL = "https://www.flowmusic.app";
+export const FLOW_MUSIC_SESSION_URL = "https://www.flowmusic.app/session?t=true";
+
+// Download formats Flow Music's song menu offers, in menu order.
+export const MUSIC_DOWNLOAD_FORMATS = ["m4a", "mp3", "wav"] as const;
+export type MusicDownloadFormat = (typeof MUSIC_DOWNLOAD_FORMATS)[number];
+
 // The verified UI contract for the redesigned Flow app (flow.google.com), recorded
 // against the live signed-in profile (see the change's design.md). Icon-only buttons
 // carry an aria-label and no matchable text; ratio/output controls inside the Agent
@@ -67,3 +80,42 @@ export const AGENT_SETTINGS_SECTION = {
   image: /Image generation default/i,
   video: /Video generation default/i
 } as const;
+
+// Flow Music studio locators. Readiness is the inverse of Flow's dashboard marker:
+// the signed-out state renders a header "Log in" button, so its absence (plus the
+// composer) proves the session is signed in.
+export function musicLocators(page: Page) {
+  return {
+    // The Producer composer: a plain textarea, present in both signed-in and
+    // signed-out states; the submit stays disabled until text registers.
+    composer: page.locator('textarea[aria-label="Chat message"]'),
+    // Chat-row submit (icon button). This is the song-request submit — the separate
+    // "Generate" button stays disabled in the session chat (live-verified).
+    submitButton: page.getByRole("button", { name: "Send message" }),
+    // Discrete structured-field controls (live-verified). The Sound/Lyrics sections
+    // are expanded by default and their textareas render at zero width — present and
+    // enabled, but not Playwright-actionable — so the section buttons are the fallback
+    // openers (live labels: "Collapse Sound section"/"Collapse Lyrics section").
+    lyricsToggle: page.getByRole("button", { name: /collapse lyrics section|^lyrics$/i }).first(),
+    lyricsField: page.locator('textarea[aria-label="Lyrics"]'),
+    soundToggle: page.getByRole("button", { name: /collapse sound section|^sound$/i }).first(),
+    soundField: page.locator('textarea[aria-label="Sound description"]'),
+    // Instrumental mode is outside the accessibility tree live (getByRole matches
+    // nothing), so it is located as a DOM element; state: data-state (live) or
+    // aria-pressed (fixture).
+    instrumentalToggle: page.locator('button[aria-label="Toggle instrumental mode"]'),
+    // Signed-out marker (login wall): the header "Log in" button.
+    loginButton: page.getByRole("button", { name: "Log in" }),
+    manualActionMarker: page.getByText(/verify your identity|sign in to continue|grant access to your google one/i),
+    rateLimitMarker: page.getByText(/unusual activity|trying again too|rate limit/i),
+    creditMarker: page.getByText(/run out of credits|insufficient credits|no credits left|out of credits/i),
+    blockedMarker: page.getByText(/can.?t help with|violates|content policy/i),
+    failedMarker: page.getByText(/generation failed|couldn.?t generate|something went wrong/i),
+    // A finished song appears as a VISIBLE session link to its /song/<id> page (a
+    // hidden entry does not count as completed); the player's "Play <title>" and
+    // per-song "More options for <title>" button follow it.
+    songLink: page.locator('a[href^="/song/"]:visible'),
+    // The Producer chat's greeting before any song exists.
+    greetingMarker: page.getByText(/your producer is here/i)
+  };
+}

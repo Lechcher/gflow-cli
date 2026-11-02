@@ -1,7 +1,8 @@
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentAutomation, CharacterAutomation, FlowAutomation, SceneAutomation, ToolAutomation } from "../src/flow/types.js";
+import type { AgentAutomation, CharacterAutomation, FlowAutomation, MusicAutomation, SceneAutomation, ToolAutomation } from "../src/flow/types.js";
 import { createProgram, runCli } from "../src/cli.js";
+import { LoginRequiredError, ManualActionRequiredError, messageForError } from "../src/errors.js";
 
 describe("CLI", () => {
   it("runs an image command through automation", async () => {
@@ -443,6 +444,131 @@ describe("CLI", () => {
     expect(capturedJob).toMatchObject({
       upscale: "2k",
       character: ["Nyra"]
+    });
+  });
+
+  it("runs a music command through the injected music automation", async () => {
+    const musicAutomation: MusicAutomation = {
+      runSong: vi.fn(async () => ({
+        jobId: "cli-music",
+        artifacts: [],
+        flowUrl: "https://www.flowmusic.app/session?t=true"
+      })),
+      assertReady: vi.fn(async () => undefined)
+    };
+    const program = createProgram({ musicAutomation });
+
+    await program.parseAsync([
+      "node",
+      "gflow",
+      "music",
+      "--id",
+      "cli-music",
+      "--prompt",
+      "a rainy lo-fi beat",
+      "--style",
+      "lo-fi hip hop, mellow piano",
+      "--lyrics",
+      "rain keeps me company",
+      "--instrumental",
+      "--duration",
+      "30",
+      "--format",
+      "m4a"
+    ]);
+
+    expect(musicAutomation.runSong).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "cli-music",
+        prompt: "a rainy lo-fi beat",
+        style: "lo-fi hip hop, mellow piano",
+        lyrics: "rain keeps me company",
+        instrumental: true,
+        duration: 30,
+        format: "m4a",
+        outDir: expect.stringContaining("gflow-output")
+      })
+    );
+  });
+
+  it("rejects a music run with a missing lyrics file before any browser opens", async () => {
+    const musicAutomation: MusicAutomation = {
+      runSong: vi.fn(),
+      assertReady: vi.fn(async () => undefined)
+    };
+    const program = createProgram({ musicAutomation });
+
+    await expect(
+      program.parseAsync([
+        "node",
+        "gflow",
+        "music",
+        "--id",
+        "bad",
+        "--prompt",
+        "x",
+        "--lyrics-file",
+        "./no-such-lyrics.txt"
+      ])
+    ).rejects.toThrow();
+    expect(musicAutomation.runSong).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unknown music download format", async () => {
+    const musicAutomation: MusicAutomation = {
+      runSong: vi.fn(),
+      assertReady: vi.fn(async () => undefined)
+    };
+    const program = createProgram({ musicAutomation });
+    program.exitOverride();
+
+    await expect(
+      program.parseAsync(["node", "gflow", "music", "--id", "x", "--prompt", "p", "--format", "aiff"])
+    ).rejects.toMatchObject({ code: "commander.invalidArgument" });
+    expect(musicAutomation.runSong).not.toHaveBeenCalled();
+  });
+
+  it("doctor passes when the injected music surface is ready", async () => {
+    const musicAutomation: MusicAutomation = {
+      runSong: vi.fn(),
+      assertReady: vi.fn(async () => undefined)
+    };
+    const program = createProgram({ musicAutomation });
+    program.exitOverride();
+
+    await expect(program.parseAsync(["node", "gflow", "doctor"])).resolves.toBeDefined();
+    expect(musicAutomation.assertReady).toHaveBeenCalled();
+  });
+
+  it("doctor fails with login-required naming Flow Music when it is signed out", async () => {
+    const musicAutomation: MusicAutomation = {
+      runSong: vi.fn(),
+      assertReady: vi.fn(async () => {
+        throw new LoginRequiredError(
+          "Google Flow Music login is required. Run `gflow auth login` and complete the Flow Music login in the browser."
+        );
+      })
+    };
+    const program = createProgram({ musicAutomation });
+    program.exitOverride();
+
+    const error = await program.parseAsync(["node", "gflow", "doctor"]).catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: "LOGIN_REQUIRED" });
+    expect(messageForError(error)).toMatch(/Flow Music/);
+  });
+
+  it("doctor fails with manual-action when Flow Music shows a consent prompt", async () => {
+    const musicAutomation: MusicAutomation = {
+      runSong: vi.fn(),
+      assertReady: vi.fn(async () => {
+        throw new ManualActionRequiredError("Flow Music shows a consent or verification prompt. Complete it, then run again.");
+      })
+    };
+    const program = createProgram({ musicAutomation });
+    program.exitOverride();
+
+    await expect(program.parseAsync(["node", "gflow", "doctor"])).rejects.toMatchObject({
+      code: "MANUAL_ACTION_REQUIRED"
     });
   });
 });
