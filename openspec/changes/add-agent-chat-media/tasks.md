@@ -29,7 +29,7 @@
 
 - [x] 5.1 Update the README (agent flags, batch agent-job example) and verify the CLI help text reads correctly (`gflow agent --help`).
 - [x] 5.2 Live smoke (ask permission first — spends Flow credits): one agent run with a local photo and one with a local video from `/Users/liberian/Desktop/Projects/video_clone`; verify artifacts download and metadata records the attachments.
-- [ ] 5.3 Bump nothing manually — commit with a Conventional Commit subject and push; the Release automation publishes npm and JSR. Verify the published version's CLI help includes the new flags.
+- [x] 5.3 Bump nothing manually — commit with a Conventional Commit subject and push; the Release automation publishes npm and JSR. Verify the published version's CLI help includes the new flags.
 
 ## Workflow follow-up
 
