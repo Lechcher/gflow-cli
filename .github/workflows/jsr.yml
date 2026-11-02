@@ -6,11 +6,14 @@ on:
       - main
     # JSR skips versions that are already published, so this only needs to run when
     # the version (package.json — bumped by the Release workflow) or the JSR
-    # manifest itself changed. Keeps doc/CI pushes off the JSR runner.
+    # manifest itself changed. Keeps doc/CI pushes off the JSR runner. The Release
+    # workflow's own commit is pushed with GITHUB_TOKEN, which GitHub does not
+    # re-trigger workflows from — hence the manual trigger.
     paths:
       - package.json
       - jsr.json
       - .github/workflows/jsr.yml
+  workflow_dispatch:
 
 jobs:
   publish:
