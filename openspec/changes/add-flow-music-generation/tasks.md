@@ -13,7 +13,7 @@
 - [x] 2.1 Add `MusicAutomation`, `RunMusicInput`, and `MusicSongResult` to `src/flow/types.ts` and `MusicPage` to `src/flow/music.ts` (open navigates to the music URL; run flow: readiness check → apply verified discrete controls → compose structured request into the chat → submit → wait for the completed-song marker → download audio → write metadata) — verify `tsc` passes and a `createProgram({ musicAutomation: fake })` smoke parses `gflow music` through the fake.
 - [x] 2.2 Extend `src/flow/download.ts` with `type: "audio"` and content-type-based extension mapping (mp3/wav/m4a/ogg/flac/aac) — verify `tests/flow.download.test.ts` covers the new extension mapping.
 - [x] 2.3 Add `musicJobSchema`, `parseMusicJob`, and the explicit `MusicJob` interface to `src/jobs/schema.ts` carrying exactly the flag set verified in 1.4 — verify new `tests/jobs.schema.test.ts` cases: defaults, non-integer duration rejected, missing lyrics file rejected, empty prompt rejected.
-- [ ] 2.4 Extend `ArtifactMetadata` (`src/output/artifacts.ts`): `type` gains `"music"`, `source` gains `"google-flow-music-browser"`, and the request fields (style/lyrics/instrumental/duration as applicable) — verify `tests/output.artifacts.test.ts` covers a music metadata write.
+- [x] 2.4 Extend `ArtifactMetadata` (`src/output/artifacts.ts`): `type` gains `"music"`, `source` gains `"google-flow-music-browser"`, and the request fields (style/lyrics/instrumental/duration as applicable) — verify `tests/output.artifacts.test.ts` covers a music metadata write.
 - [x] 2.5 Add `musicLocators(page)` to `src/flow/locators.ts` for the contract recorded in 1.1–1.5 — verify the fixture tests in 4.2 drive through these locators only.
 - [x] 2.6 Wire the `music` command in `src/cli.ts`: `realMusicAutomation` helper, `--id`/`--prompt`, the verified structured flags, `--timeout`, `--out`, shared session options, and the `musicAutomation` seam in `CreateProgramOptions` — verify `tests/cli.test.ts` runs `gflow music` through an injected fake and `gflow music --help` output matches the README table.
 
@@ -33,7 +33,7 @@
 
 - [x] 5.1 Update the README with the `gflow music` command (flags table, examples, metadata example showing `type: "music"`); verify every documented flag exists in `gflow music --help`.
 - [x] 5.2 Live smoke (ask permission first — spends Flow Music daily credits): `gflow auth login`, `gflow doctor`, then one `gflow music` run with structured flags from `/Users/liberian/Desktop/Projects/video_clone`; verify the audio downloads and metadata records the request.
-- [ ] 5.3 Commit with a `feat:` subject and push (with `--no-verify`); verify the Release automation publishes and the published version's `--help` includes the `music` command.
+- [x] 5.3 Commit with a `feat:` subject and push (with `--no-verify`); verify the Release automation publishes and the published version's `--help` includes the `music` command.
 
 ## Workflow follow-up
 
